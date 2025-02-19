@@ -61,9 +61,9 @@ class App {
     }
 
     private async createScene(): Promise<void> {
-        // Hero
+        // Hero (unchanged)
         const heroGeometry = new THREE.BoxGeometry(2, 2, 2);
-        const heroMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 }); // Switched to Standard for lighting
+        const heroMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
         this.hero = new THREE.Mesh(heroGeometry, heroMaterial);
         this.hero.position.set(0, 1.2, 0);
         this.scene.add(this.hero);
@@ -71,10 +71,14 @@ class App {
         this.heroBody.addShape(new CANNON.Box(new CANNON.Vec3(1, 1, 1)));
         this.heroBody.position.set(0, 1.2, 0);
         this.world.addBody(this.heroBody);
-
-        // Ground
+    
+        // Ground with Texture
+        const textureLoader = new THREE.TextureLoader();
+        const groundTexture = textureLoader.load('/assets/textures/ground.jpg');
+        groundTexture.wrapS = groundTexture.wrapT = THREE.RepeatWrapping;
+        groundTexture.repeat.set(50, 50); // Adjust repetition for detail
+        const groundMaterial = new THREE.MeshStandardMaterial({ map: groundTexture });
         const groundGeometry = new THREE.PlaneGeometry(1000, 1000);
-        const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x808080 });
         const ground = new THREE.Mesh(groundGeometry, groundMaterial);
         ground.rotation.x = -Math.PI / 2;
         ground.position.y = -1;
@@ -84,16 +88,71 @@ class App {
         groundBody.position.set(0, -1, 0);
         groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
         this.world.addBody(groundBody);
-
-        // Improved Lighting
-        const ambientLight = new THREE.AmbientLight(0x404040, 1.0); // Soft base light
+    
+        // Streets (simple grid pattern)
+        const streetMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 }); // Dark gray for streets
+        const streetWidth = 10;
+        const streetGeometry = new THREE.PlaneGeometry(1000, streetWidth);
+        for (let x = -400; x <= 400; x += 100) {
+            const streetX = new THREE.Mesh(streetGeometry, streetMaterial);
+            streetX.rotation.x = -Math.PI / 2;
+            streetX.position.set(x, -0.95, 0); // Slightly above ground to avoid z-fighting
+            this.scene.add(streetX);
+        }
+        const streetGeometryZ = new THREE.PlaneGeometry(streetWidth, 1000);
+        for (let z = -400; z <= 400; z += 100) {
+            const streetZ = new THREE.Mesh(streetGeometryZ, streetMaterial);
+            streetZ.rotation.x = -Math.PI / 2;
+            streetZ.position.set(0, -0.95, z);
+            this.scene.add(streetZ);
+        }
+    
+        // Night Sky with Stars
+        const skyGeometry = new THREE.SphereGeometry(1000, 32, 32); // Large sphere for sky
+        const skyMaterial = new THREE.MeshBasicMaterial({
+            color: 0x001133, // Deep blue night sky
+            side: THREE.BackSide // Render inside of sphere
+        });
+        const sky = new THREE.Mesh(skyGeometry, skyMaterial);
+        this.scene.add(sky);
+    
+        // Stars
+        const starGeometry = new THREE.BufferGeometry();
+        const starCount = 2000;
+        const positions = new Float32Array(starCount * 3);
+        for (let i = 0; i < starCount; i++) {
+            positions[i * 3] = (Math.random() - 0.5) * 2000;     // X
+            positions[i * 3 + 1] = Math.random() * 1000;         // Y (mostly above horizon)
+            positions[i * 3 + 2] = (Math.random() - 0.5) * 2000; // Z
+        }
+        starGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        const starMaterial = new THREE.PointsMaterial({
+            color: 0xffffff,
+            size: 2,
+            sizeAttenuation: true
+        });
+        const stars = new THREE.Points(starGeometry, starMaterial);
+        this.scene.add(stars);
+    
+        // Adjusted Lighting for multi-angle illumination
+        const ambientLight = new THREE.AmbientLight(0x404060, 0.8); // Brighter bluish ambient
         this.scene.add(ambientLight);
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0); // Sun-like light
-        directionalLight.position.set(100, 100, 100);
-        directionalLight.castShadow = true;
-        this.scene.add(directionalLight);
 
-        // Load City Models
+        // Multiple directional lights for even illumination
+        const light1 = new THREE.DirectionalLight(0x8080ff, 0.5); // Moon-like light from above
+        light1.position.set(100, 100, 100);
+        light1.castShadow = true;
+        this.scene.add(light1);
+
+        const light2 = new THREE.DirectionalLight(0x8080ff, 0.3); // Secondary light from opposite side
+        light2.position.set(-100, 80, -100);
+        this.scene.add(light2);
+
+        const light3 = new THREE.DirectionalLight(0x8080ff, 0.3); // Light from another angle
+        light3.position.set(0, 90, -150);
+        this.scene.add(light3);
+    
+        // Load City Models (unchanged)
         const gltfLoader = new GLTFLoader();
         const loadModel = (path: string, position: THREE.Vector3, scale: number): Promise<THREE.Group> => {
             return new Promise((resolve) => {
@@ -104,15 +163,15 @@ class App {
                     const size = new THREE.Vector3();
                     bbox.getSize(size);
                     model.position.copy(position);
-                    model.position.y = -1; // Adjust to ground level
+                    model.position.y = -1;
                     this.scene.add(model);
-
+    
                     const body = new CANNON.Body({ mass: 0 });
                     body.addShape(new CANNON.Box(new CANNON.Vec3(size.x / 2, size.y / 2, size.z / 2)));
                     body.position.copy(model.position);
                     this.world.addBody(body);
                     this.buildings.push({ mesh: model, body });
-
+    
                     resolve(model);
                 });
             });
@@ -149,37 +208,37 @@ class App {
             const model = skyscrapers[Math.floor(Math.random() * skyscrapers.length)];
             const x = (i % 5 - 2) * 100 + (Math.random() * 40 - 20);
             const z = Math.floor(i / 5 - 1) * 100 + (Math.random() * 40 - 20);
-            await loadModel(model, new THREE.Vector3(x, 0, z), 50); // 50x scale
+            await loadModel(model, new THREE.Vector3(x, 0, z), 50);
         }
-
-        // Mid-rise: Large and Low Buildings
+    
+        // Mid-rise: Large and Low Buildings (unchanged)
         for (let x = -300; x <= 300; x += 100) {
             for (let z = -300; z <= 300; z += 100) {
                 if (Math.abs(x) > 100 || Math.abs(z) > 100) {
                     const type = Math.random() > 0.5 ? largeBuildings : lowBuildings;
                     const model = type[Math.floor(Math.random() * type.length)];
-                    await loadModel(model, new THREE.Vector3(x, 0, z), 25); // 25x scale
+                    await loadModel(model, new THREE.Vector3(x, 0, z), 25);
                 }
             }
         }
-
-        // Suburbs: Small Buildings and Details
+    
+        // Suburbs: Small Buildings and Details (unchanged)
         for (let i = 0; i < 20; i++) {
             const model = smallBuildings[Math.floor(Math.random() * smallBuildings.length)];
             const x = Math.random() * 800 - 400;
             const z = Math.random() * 800 - 400;
             if (Math.abs(x) > 300 || Math.abs(z) > 300) {
-                await loadModel(model, new THREE.Vector3(x, 0, z), 15); // 15x scale
+                await loadModel(model, new THREE.Vector3(x, 0, z), 15);
             }
         }
         for (let i = 0; i < 30; i++) {
             const model = details[Math.floor(Math.random() * details.length)];
             const x = Math.random() * 800 - 400;
             const z = Math.random() * 800 - 400;
-            await loadModel(model, new THREE.Vector3(x, 0, z), 5); // 5x scale
+            await loadModel(model, new THREE.Vector3(x, 0, z), 5);
         }
-
-        // Ammo Pickups
+    
+        // Ammo Pickups (unchanged)
         const ammoMaterial = new THREE.MeshStandardMaterial({ color: 0xffff00 });
         for (let i = 0; i < 10; i++) {
             const ammoBox = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), ammoMaterial);
@@ -191,8 +250,8 @@ class App {
             this.world.addBody(ammoBody);
             this.ammoPickups.push({ mesh: ammoBox, body: ammoBody });
         }
-
-        // Borders
+    
+        // Borders (unchanged)
         const borderMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff });
         const borders = [
             { size: [5, 100, 1000], pos: [-500, 50, 0] },
@@ -210,7 +269,7 @@ class App {
             borderBody.position.copy(border.position);
             this.world.addBody(borderBody);
         });
-
+    
         this.camera.position.set(0, 2, -25);
     }
 
@@ -267,13 +326,18 @@ class App {
             if (this.ammo > 0) {
                 this.ammo--;
                 this.ammoCounter.textContent = `Ammo: ${this.ammo}`;
-
-                const bulletGeometry = new THREE.SphereGeometry(0.1, 16, 16);
-                const bulletMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff });
+    
+                const bulletGeometry = new THREE.SphereGeometry(0.3, 16, 16);
+                const bulletMaterial = new THREE.MeshStandardMaterial({
+                    color: 0xffffff,
+                    emissive: 0xffff00, // Yellow glow
+                    emissiveIntensity: 1 // Strength of glow
+                });
                 const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
                 bullet.position.copy(this.camera.position);
                 this.scene.add(bullet);
-
+  
+    
                 const bulletBody = new CANNON.Body({ mass: 1 });
                 bulletBody.addShape(new CANNON.Sphere(0.1));
                 bulletBody.position.copy(this.camera.position);
@@ -281,7 +345,7 @@ class App {
                 bulletBody.velocity.set(direction.x, direction.y, direction.z);
                 this.world.addBody(bulletBody);
                 this.bullets.push({ mesh: bullet, body: bulletBody });
-
+    
                 setTimeout(() => {
                     const index = this.bullets.findIndex(b => b.mesh === bullet);
                     if (index !== -1) {
