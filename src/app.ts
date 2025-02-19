@@ -1,5 +1,4 @@
 import * as THREE from "three";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import * as CANNON from "cannon-es";
 
 class App {
@@ -12,7 +11,6 @@ class App {
     private heroBody: CANNON.Body;
     private ammoPickups: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
     private bullets: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
-    private buildings: { mesh: THREE.Object3D; body: CANNON.Body }[] = [];
     private ammo: number = 30;
     private moveForward: boolean = false;
     private moveBackward: boolean = false;
@@ -23,13 +21,15 @@ class App {
     private ammoCounter: HTMLElement;
     private pauseMenu: HTMLElement;
     private resumeButton: HTMLElement;
-    private mouseX: number = 0;
-    private mouseY: number = 0;
+    private mouseX: number = 0; // Track horizontal mouse movement
+    private mouseY: number = 0; // Track vertical mouse movement
 
     constructor() {
         const getCanvas = (): HTMLCanvasElement => {
             const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
-            if (!canvas) throw new Error("Canvas element not found after DOM load");
+            if (!canvas) {
+                throw new Error("Canvas element not found after DOM load");
+            }
             return canvas;
         };
 
@@ -60,10 +60,9 @@ class App {
         }
     }
 
-    private async createScene(): Promise<void> {
-        // Hero
+    private createScene(): void {
         const heroGeometry = new THREE.BoxGeometry(2, 2, 2);
-        const heroMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+        const heroMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
         this.hero = new THREE.Mesh(heroGeometry, heroMaterial);
         this.hero.position.set(0, 1.2, 0);
         this.scene.add(this.hero);
@@ -72,9 +71,8 @@ class App {
         this.heroBody.position.set(0, 1.2, 0);
         this.world.addBody(this.heroBody);
 
-        // Ground (Half size)
-        const groundGeometry = new THREE.PlaneGeometry(500, 500);
-        const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x808080 });
+        const groundGeometry = new THREE.PlaneGeometry(200, 200);
+        const groundMaterial = new THREE.MeshBasicMaterial({ color: 0x808080 });
         const ground = new THREE.Mesh(groundGeometry, groundMaterial);
         ground.rotation.x = -Math.PI / 2;
         ground.position.y = -1;
@@ -85,106 +83,49 @@ class App {
         groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
         this.world.addBody(groundBody);
 
-        // Lighting
-        const ambientLight = new THREE.AmbientLight(0x404040, 1.0);
-        this.scene.add(ambientLight);
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
-        directionalLight.position.set(100, 100, 100);
-        directionalLight.castShadow = true;
-        this.scene.add(directionalLight);
+        const light1 = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
+        light1.position.set(0, 10, 0);
+        this.scene.add(light1);
+        const light2 = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
+        light2.position.set(60, 60, 0);
+        this.scene.add(light2);
 
-        // Load City Models
-        const gltfLoader = new GLTFLoader();
-        const loadModel = (path: string, position: THREE.Vector3, scale: number): Promise<THREE.Group> => {
-            return new Promise((resolve) => {
-                gltfLoader.load(`/assets/models/${path}`, (gltf) => {
-                    const model = gltf.scene;
-                    model.scale.set(scale, scale, scale);
-                    const bbox = new THREE.Box3().setFromObject(model);
-                    const minY = bbox.min.y; // Ground contact point
-                    model.position.copy(position);
-                    model.position.y = -minY * scale - 1; // Align base to ground
-                    this.scene.add(model);
+        const buildingMaterial = new THREE.MeshBasicMaterial({ color: 0xb0b0b0 });
+        const mainBuilding = new THREE.Mesh(new THREE.BoxGeometry(30, 20, 30), buildingMaterial);
+        mainBuilding.position.set(20, 10, 20);
+        this.scene.add(mainBuilding);
+        const mainBuildingBody = new CANNON.Body({ mass: 0 });
+        mainBuildingBody.addShape(new CANNON.Box(new CANNON.Vec3(15, 10, 15)));
+        mainBuildingBody.position.set(20, 10, 20);
+        this.world.addBody(mainBuildingBody);
 
-                    const size = new THREE.Vector3();
-                    bbox.getSize(size);
-                    const body = new CANNON.Body({ mass: 0 });
-                    body.addShape(new CANNON.Box(new CANNON.Vec3(size.x * scale / 2, size.y * scale / 2, size.z * scale / 2)));
-                    body.position.set(model.position.x, model.position.y + size.y * scale / 2, model.position.z);
-                    this.world.addBody(body);
-                    this.buildings.push({ mesh: model, body });
-
-                    resolve(model);
-                });
-            });
-        };
-
-        // Building Types with Scales
-        const skyscrapers = [
-            "skyscraperA.glb", "skyscraperB.glb", "skyscraperC.glb",
-            "skyscraperD.glb", "skyscraperE.glb", "skyscraperF.glb"
-        ];
-        const largeBuildings = [
-            "large_buildingA.glb", "large_buildingB.glb", "large_buildingC.glb",
-            "large_buildingD.glb", "large_buildingE.glb", "large_buildingF.glb",
-            "large_buildingG.glb"
-        ];
-        const lowBuildings = [
-            "low_buildingA.glb", "low_buildingB.glb", "low_buildingC.glb",
-            "low_buildingD.glb", "low_buildingE.glb", "low_buildingF.glb",
-            "low_buildingG.glb", "low_buildingH.glb", "low_buildingI.glb",
-            "low_buildingJ.glb", "low_buildingK.glb", "low_buildingL.glb",
-            "low_buildingM.glb", "low_buildingN.glb", "low_wideA.glb", "low_wideB.glb"
-        ];
-        const smallBuildings = [
-            "small_buildingA.glb", "small_buildingB.glb", "small_buildingC.glb",
-            "small_buildingD.glb", "small_buildingE.glb", "small_buildingF.glb"
-        ];
-        const details = [
-            "detail_awning.glb", "detail_awningWide.glb", "detail_overhang.glb",
-            "detail_overhangWide.glb", "detail_umbrella.glb", "detail_umbrellaDetailed.glb"
-        ];
-
-        // Downtown: Skyscrapers (5 units, tighter cluster)
-        for (let i = 0; i < 5; i++) {
-            const model = skyscrapers[Math.floor(Math.random() * skyscrapers.length)];
-            const x = (i % 3 - 1) * 50 + (Math.random() * 20 - 10);
-            const z = Math.floor(i / 3 - 1) * 50 + (Math.random() * 20 - 10);
-            await loadModel(model, new THREE.Vector3(x, 0, z), 50);
-        }
-
-        // Mid-rise: Large and Low Buildings (smaller grid)
-        for (let x = -150; x <= 150; x += 50) {
-            for (let z = -150; z <= 150; z += 50) {
-                if (Math.abs(x) > 50 || Math.abs(z) > 50) {
-                    const type = Math.random() > 0.5 ? largeBuildings : lowBuildings;
-                    const model = type[Math.floor(Math.random() * type.length)];
-                    await loadModel(model, new THREE.Vector3(x, 0, z), 25);
-                }
-            }
-        }
-
-        // Suburbs: Small Buildings and Details (fewer scattered)
         for (let i = 0; i < 10; i++) {
-            const model = smallBuildings[Math.floor(Math.random() * smallBuildings.length)];
-            const x = Math.random() * 400 - 200;
-            const z = Math.random() * 400 - 200;
-            if (Math.abs(x) > 150 || Math.abs(z) > 150) {
-                await loadModel(model, new THREE.Vector3(x, 0, z), 15);
-            }
-        }
-        for (let i = 0; i < 15; i++) {
-            const model = details[Math.floor(Math.random() * details.length)];
-            const x = Math.random() * 400 - 200;
-            const z = Math.random() * 400 - 200;
-            await loadModel(model, new THREE.Vector3(x, 0, z), 5);
+            const stair = new THREE.Mesh(new THREE.BoxGeometry(5, 1, 2), buildingMaterial);
+            stair.position.set(5, i * 1 + 0.5, 20 + i * 2);
+            this.scene.add(stair);
+            const stairBody = new CANNON.Body({ mass: 0 });
+            stairBody.addShape(new CANNON.Box(new CANNON.Vec3(2.5, 0.5, 1)));
+            stairBody.position.set(5, i * 1 + 0.5, 20 + i * 2);
+            this.world.addBody(stairBody);
         }
 
-        // Ammo Pickups
-        const ammoMaterial = new THREE.MeshStandardMaterial({ color: 0xffff00 });
+        for (let i = 0; i < 4; i++) {
+            const height = Math.random() * 20 + 10;
+            const width = Math.random() * 20 + 10;
+            const depth = Math.random() * 20 + 10;
+            const building = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), buildingMaterial);
+            building.position.set(Math.random() * 180 - 90, height / 2, Math.random() * 180 - 90);
+            this.scene.add(building);
+            const buildingBody = new CANNON.Body({ mass: 0 });
+            buildingBody.addShape(new CANNON.Box(new CANNON.Vec3(width / 2, height / 2, depth / 2)));
+            buildingBody.position.copy(building.position);
+            this.world.addBody(buildingBody);
+        }
+
+        const ammoMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
         for (let i = 0; i < 5; i++) {
             const ammoBox = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), ammoMaterial);
-            ammoBox.position.set(Math.random() * 400 - 200, 0.5, Math.random() * 400 - 200);
+            ammoBox.position.set(Math.random() * 180 - 90, 0.5, Math.random() * 180 - 90);
             this.scene.add(ammoBox);
             const ammoBody = new CANNON.Body({ mass: 0 });
             ammoBody.addShape(new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5)));
@@ -193,13 +134,12 @@ class App {
             this.ammoPickups.push({ mesh: ammoBox, body: ammoBody });
         }
 
-        // Borders (Half size)
         const borderMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff });
         const borders = [
-            { size: [5, 100, 500], pos: [-250, 50, 0] },
-            { size: [5, 100, 500], pos: [250, 50, 0] },
-            { size: [500, 100, 5], pos: [0, 50, 250] },
-            { size: [500, 100, 5], pos: [0, 50, -250] },
+            { size: [5, 100, 200], pos: [-100, 50, 0] },
+            { size: [5, 100, 200], pos: [100, 50, 0] },
+            { size: [200, 100, 5], pos: [0, 50, 100] },
+            { size: [200, 100, 5], pos: [0, 50, -100] },
         ];
         borders.forEach(({ size, pos }) => {
             const border = new THREE.Mesh(new THREE.BoxGeometry(...size), borderMaterial);
@@ -238,7 +178,7 @@ class App {
                 case 68: this.moveRight = false; break;
                 case 65: this.moveLeft = false; break;
                 case 32: this.jump = false; break;
-                case 27:
+                case 27: // Escape
                     if (!this.isPaused) {
                         this.isPaused = true;
                         this.pauseMenu.style.display = "block";
@@ -258,9 +198,9 @@ class App {
             if (this.isPaused || !document.pointerLockElement) return;
             const movementX = event.movementX || 0;
             const movementY = event.movementY || 0;
-            this.mouseX -= movementX * 0.002;
-            this.mouseY -= movementY * 0.002;
-            this.mouseY = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.mouseY));
+            this.mouseX -= movementX * 0.002; // Update yaw
+            this.mouseY -= movementY * 0.002; // Update pitch
+            this.mouseY = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.mouseY)); // Clamp pitch
         });
 
         this.canvas.addEventListener("mousedown", () => {
@@ -270,7 +210,7 @@ class App {
                 this.ammoCounter.textContent = `Ammo: ${this.ammo}`;
 
                 const bulletGeometry = new THREE.SphereGeometry(0.1, 16, 16);
-                const bulletMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff });
+                const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
                 const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
                 bullet.position.copy(this.camera.position);
                 this.scene.add(bullet);
@@ -326,10 +266,13 @@ class App {
             }
             this.heroBody.velocity.set(forward.x * fSpeed + right.x * sSpeed, velocity.y, forward.z * fSpeed + right.z * sSpeed);
 
+            // Update camera position and orientation
             const cameraPosition = this.hero.position.clone().add(new THREE.Vector3(0, 1, 0));
             this.camera.position.copy(cameraPosition);
-            this.camera.rotation.order = "YXZ";
-            this.camera.rotation.set(this.mouseY, this.mouseX, 0);
+
+            // Set camera rotation with fixed up vector
+            this.camera.rotation.order = "YXZ"; // Ensure yaw (Y) applies first, then pitch (X)
+            this.camera.rotation.set(this.mouseY, this.mouseX, 0); // No roll (Z = 0)
 
             this.bullets.forEach(bullet => {
                 bullet.mesh.position.copy(bullet.body.position);
