@@ -34,6 +34,7 @@ class App {
     private ammoPickups: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
     private thunderBoosts: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
     private bullets: { mesh: THREE.Mesh; body: CANNON.Body; owner: string }[] = [];
+    private sparks: { mesh: THREE.Mesh; lifetime: number }[] = [];
     private buildings: { mesh: THREE.Object3D; body: CANNON.Body }[] = [];
     private ammo: number = 5;
     private lives: number = 5;
@@ -48,6 +49,7 @@ class App {
     private speedBoostCounter: HTMLElement;
     private livesCounter: HTMLElement;
     private healthCounter: HTMLElement;
+    private ammoWarning: HTMLElement;
     private pauseMenu: HTMLElement;
     private lobby: HTMLElement;
     private lobbyTitle: HTMLElement;
@@ -69,6 +71,8 @@ class App {
     private playerId: number | null = null;
     private playerName: string | null = null;
     private isReady: boolean = false;
+    private blinkTimer: number = 0;
+    private blinkInterval: number = 500; // Blink every 500ms
 
     constructor() {
         this.socket = io("http://localhost:3000");
@@ -85,6 +89,7 @@ class App {
             this.speedBoostCounter = document.getElementById("speedBoostCounter") as HTMLElement;
             this.livesCounter = document.getElementById("livesCounter") as HTMLElement;
             this.healthCounter = document.getElementById("healthCounter") as HTMLElement;
+            this.ammoWarning = document.getElementById("ammoWarning") as HTMLElement;
             this.pauseMenu = document.getElementById("pauseMenu") as HTMLElement;
             this.lobby = document.getElementById("lobby") as HTMLElement;
             this.lobbyTitle = document.getElementById("lobbyTitle") as HTMLElement;
@@ -155,6 +160,7 @@ class App {
                     this.livesCounter.textContent = `Lives: ${this.lives}`;
                     this.healthCounter.textContent = `Health: ${this.health}`;
                     this.ammoCounter.textContent = `Ammo: ${this.ammo}`;
+                    this.updateAmmoWarning();
                 } else {
                     this.updateOtherPlayer(socketId, player);
                 }
@@ -194,7 +200,7 @@ class App {
         });
 
         this.socket.on("playerHitEffect", (data: { targetSocketId: string }) => {
-            // Visual feedback handled by playersUpdate
+            // Optional: Add additional visual feedback here if needed
         });
 
         this.socket.on("playerOut", () => {
@@ -208,6 +214,23 @@ class App {
             this.pauseMenu.style.display = "block";
             alert(`Game Over! Winner: ${this.otherPlayers.get(winnerSocketId)?.nameTag.userData.name || "Unknown"}`);
         });
+    }
+
+    private updateAmmoWarning(): void {
+        if (this.ammo <= 0) {
+            this.ammoWarning.style.display = "block";
+        } else {
+            this.ammoWarning.style.display = "none";
+        }
+    }
+
+    private createSpark(position: THREE.Vector3): void {
+        const sparkGeometry = new THREE.SphereGeometry(0.2, 8, 8);
+        const sparkMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+        const spark = new THREE.Mesh(sparkGeometry, sparkMaterial);
+        spark.position.copy(position);
+        this.scene.add(spark);
+        this.sparks.push({ mesh: spark, lifetime: 500 }); // 500ms lifetime
     }
 
     private async createScene(): Promise<void> {
@@ -631,6 +654,7 @@ class App {
             if (this.isPaused || !document.pointerLockElement || this.ammo <= 0) return;
             this.ammo--;
             this.ammoCounter.textContent = `Ammo: ${this.ammo}`;
+            this.updateAmmoWarning();
 
             const direction = this.camera.getWorldDirection(new THREE.Vector3());
             this.socket.emit("playerShot", {
@@ -682,21 +706,31 @@ class App {
                 rotation: { x: this.camera.rotation.x, y: this.camera.rotation.y, z: this.camera.rotation.z },
             });
 
-            this.bullets.forEach((bullet) => {
+            this.bullets.forEach((bullet, bulletIndex) => {
                 bullet.mesh.position.copy(bullet.body.position);
                 bullet.mesh.quaternion.copy(bullet.body.quaternion);
 
+                // Check collision with local player
+                const heroDistance = bullet.mesh.position.distanceTo(this.hero.position);
+                if (bullet.owner !== this.socket.id && heroDistance < 2) {
+                    this.socket.emit("playerHit", { targetSocketId: this.socket.id });
+                    this.createSpark(this.hero.position);
+                    this.scene.remove(bullet.mesh);
+                    this.world.removeBody(bullet.body);
+                    this.bullets.splice(bulletIndex, 1);
+                    return;
+                }
+
+                // Check collision with other players
                 this.otherPlayers.forEach((playerObj, socketId) => {
                     if (bullet.owner !== socketId) {
                         const distance = bullet.mesh.position.distanceTo(playerObj.mesh.position);
                         if (distance < 2) {
                             this.socket.emit("playerHit", { targetSocketId: socketId });
-                            const bulletIndex = this.bullets.findIndex((b) => b.mesh === bullet.mesh);
-                            if (bulletIndex !== -1) {
-                                this.scene.remove(this.bullets[bulletIndex].mesh);
-                                this.world.removeBody(this.bullets[bulletIndex].body);
-                                this.bullets.splice(bulletIndex, 1);
-                            }
+                            this.createSpark(playerObj.mesh.position);
+                            this.scene.remove(bullet.mesh);
+                            this.world.removeBody(bullet.body);
+                            this.bullets.splice(bulletIndex, 1);
                         }
                     }
                 });
@@ -708,6 +742,7 @@ class App {
                 if (distance < 3) {
                     this.ammo += 10;
                     this.ammoCounter.textContent = `Ammo: ${this.ammo}`;
+                    this.updateAmmoWarning();
                     this.scene.remove(pickup.mesh);
                     this.world.removeBody(pickup.body);
                     this.ammoPickups.splice(index, 1);
@@ -732,9 +767,33 @@ class App {
                 }
             });
 
+            // Update sparks
+            this.sparks.forEach((spark, index) => {
+                spark.lifetime -= 16.67; // Approx 1/60th of a second
+                if (spark.lifetime <= 0) {
+                    this.scene.remove(spark.mesh);
+                    this.sparks.splice(index, 1);
+                } else {
+                    spark.mesh.scale.multiplyScalar(0.95); // Fade out effect
+                }
+            });
+
+            // Blink "Out of Ammo" warning
+            if (this.ammo <= 0) {
+                this.blinkTimer += 16.67;
+                if (this.blinkTimer >= this.blinkInterval) {
+                    this.ammoWarning.style.visibility = this.ammoWarning.style.visibility === "hidden" ? "visible" : "hidden";
+                    this.blinkTimer = 0;
+                }
+            } else {
+                this.ammoWarning.style.visibility = "visible"; // Reset to visible when ammo > 0 (though hidden by display: none)
+            }
+
             this.renderer.render(this.scene, this.camera);
         }
     }
+
+
 }
 
 window.addEventListener("DOMContentLoaded", () => {
