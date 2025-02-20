@@ -19,6 +19,8 @@ interface PlayerData {
     lives: number;
     ammo: number;
     ready: boolean;
+    hits: number;
+    avatar?: string; // Added for character model
 }
 
 class App {
@@ -28,17 +30,18 @@ class App {
     private renderer: THREE.WebGLRenderer;
     private world: CANNON.World;
     private canvas: HTMLCanvasElement;
-    private hero: THREE.Mesh;
+    private hero: THREE.Object3D;
     private heroBody: CANNON.Body;
-    private otherPlayers: Map<string, { mesh: THREE.Mesh; nameTag: THREE.Mesh; healthBar: THREE.Mesh }> = new Map();
+    private otherPlayers: Map<string, { mesh: THREE.Object3D; nameTag: THREE.Mesh; healthBar: THREE.Mesh }> = new Map();
     private ammoPickups: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
     private thunderBoosts: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
     private bullets: { mesh: THREE.Mesh; body: CANNON.Body; owner: string }[] = [];
     private sparks: { mesh: THREE.Mesh; lifetime: number }[] = [];
     private buildings: { mesh: THREE.Object3D; body: CANNON.Body }[] = [];
-    private ammo: number = 5;
+    private ammo: number = 50;
     private lives: number = 5;
     private health: number = 100;
+    private hits: number = 0;
     private moveForward: boolean = false;
     private moveBackward: boolean = false;
     private moveRight: boolean = false;
@@ -59,6 +62,9 @@ class App {
     private usernameInput: HTMLInputElement;
     private lobbyStatus: HTMLElement;
     private countdown: HTMLElement;
+    private characterSelection: HTMLElement;
+    private characterPreview: HTMLElement;
+    private characterOptions: HTMLElement;
     private mouseX: number = 0;
     private mouseY: number = 0;
     private videoPlane: THREE.Mesh;
@@ -70,9 +76,10 @@ class App {
     private roomId: string | null = null;
     private playerId: number | null = null;
     private playerName: string | null = null;
+    private selectedCharacter: string = "character-male-a.glb"; // Default character
     private isReady: boolean = false;
     private blinkTimer: number = 0;
-    private blinkInterval: number = 500; // Blink every 500ms
+    private blinkInterval: number = 500;
 
     constructor() {
         this.socket = io("http://localhost:3000");
@@ -99,6 +106,9 @@ class App {
             this.usernameInput = document.getElementById("usernameInput") as HTMLInputElement;
             this.lobbyStatus = document.getElementById("lobbyStatus") as HTMLElement;
             this.countdown = document.getElementById("countdown") as HTMLElement;
+            this.characterSelection = document.getElementById("characterSelection") as HTMLElement;
+            this.characterPreview = document.getElementById("characterPreview") as HTMLElement;
+            this.characterOptions = document.getElementById("characterOptions") as HTMLElement;
 
             this.scene = new THREE.Scene();
             this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
@@ -111,6 +121,7 @@ class App {
             this.lobby.style.display = "block";
             this.setupSocketEvents();
             this.setupInput();
+            this.setupCharacterSelection();
         };
 
         if (document.readyState === "complete" || document.readyState === "interactive") {
@@ -125,38 +136,43 @@ class App {
             const username = this.usernameInput.value.trim();
             if (username) {
                 this.playerName = username;
-                this.socket.emit("login", { name: username });
                 this.joinButton.style.display = "none";
                 this.usernameInput.style.display = "none";
-                this.readyButton.style.display = "block";
-                this.lobbyTitle.textContent = "Waiting for Players";
+                this.characterSelection.style.display = "block";
+                this.lobbyTitle.textContent = "Select Your Character";
             }
         });
-
+    
         this.readyButton.addEventListener("click", () => {
             if (!this.isReady) {
-                this.socket.emit("playerReady");
-                this.isReady = true;
-                this.readyButton.textContent = "Ready (Waiting)";
-                this.readyButton.disabled = true;
+                this.socket.emit("login", { name: this.playerName, avatar: this.selectedCharacter });
+                // Don’t set isReady here; wait for loginSuccess to ensure room is joined
             }
         });
-
+    
         this.socket.on("loginSuccess", (data: { roomId: string; playerId: number; name: string }) => {
             this.roomId = data.roomId;
             this.playerId = data.playerId;
             this.playerName = data.name;
+            this.characterSelection.style.display = "none";
+            this.lobbyTitle.textContent = "Waiting for Players";
+            this.readyButton.style.display = "none"; // Hide Ready button after login
+            this.socket.emit("playerReady"); // Emit playerReady immediately after login
+            this.isReady = true;
+            this.readyButton.textContent = "Ready (Waiting)";
+            this.readyButton.disabled = true;
             this.createScene().then(() => {
                 this.animate();
             });
         });
-
+    
         this.socket.on("playersUpdate", (players: { [socketId: string]: PlayerData }) => {
             Object.entries(players).forEach(([socketId, player]) => {
                 if (socketId === this.socket.id) {
                     this.lives = player.lives;
                     this.health = player.health;
                     this.ammo = player.ammo;
+                    this.hits = player.hits;
                     this.livesCounter.textContent = `Lives: ${this.lives}`;
                     this.healthCounter.textContent = `Health: ${this.health}`;
                     this.ammoCounter.textContent = `Ammo: ${this.ammo}`;
@@ -168,20 +184,20 @@ class App {
             const totalPlayers = Object.keys(players).length;
             this.lobbyStatus.textContent = `Players in lobby: ${totalPlayers}`;
         });
-
+    
         this.socket.on("lobbyUpdate", ({ total, ready }: { total: number; ready: number }) => {
             this.lobbyStatus.textContent = `Players: ${total} (Ready: ${ready}/${total})`;
         });
-
+    
         this.socket.on("countdown", ({ timeLeft }: { timeLeft: number }) => {
             this.countdown.textContent = timeLeft > 0 ? `Starting in ${timeLeft}...` : "Game Starting!";
         });
-
+    
         this.socket.on("gameStarted", () => {
             this.lobby.style.display = "none";
-            this.canvas.requestPointerLock();
+            this.isPaused = false;
         });
-
+    
         this.socket.on("playerMoved", (data: { socketId: string; position: any; rotation: any }) => {
             this.updateOtherPlayer(data.socketId, {
                 socketId: data.socketId,
@@ -190,30 +206,67 @@ class App {
                 name: "",
                 health: 100,
                 lives: 5,
-                ammo: 5,
+                ammo: 50,
                 ready: false,
+                hits: 0,
             });
         });
-
+    
         this.socket.on("playerShot", (data: { socketId: string; origin: any; direction: any }) => {
             this.spawnBullet(data.origin, data.direction, data.socketId);
         });
-
+    
         this.socket.on("playerHitEffect", (data: { targetSocketId: string }) => {
-            // Optional: Add additional visual feedback here if needed
+            // Optional feedback
         });
-
+    
         this.socket.on("playerOut", () => {
             this.isPaused = true;
             this.pauseMenu.style.display = "block";
             alert("You are out of lives!");
         });
-
+    
         this.socket.on("gameEnded", ({ winnerSocketId }: { winnerSocketId: string }) => {
             this.isPaused = true;
             this.pauseMenu.style.display = "block";
             alert(`Game Over! Winner: ${this.otherPlayers.get(winnerSocketId)?.nameTag.userData.name || "Unknown"}`);
+            this.resetGameForNewRoom();
         });
+    }
+
+    private resetGameForNewRoom(): void {
+        this.roomId = null;
+        this.isReady = false;
+        this.otherPlayers.clear();
+        this.bullets.forEach(bullet => {
+            this.scene.remove(bullet.mesh);
+            this.world.removeBody(bullet.body);
+        });
+        this.bullets = [];
+        this.sparks.forEach(spark => this.scene.remove(spark.mesh));
+        this.sparks = [];
+        this.scene.remove(this.hero);
+        this.world.removeBody(this.heroBody);
+        this.lobby.style.display = "block";
+        this.lobbyTitle.textContent = "Enter Username";
+        this.usernameInput.style.display = "block";
+        this.joinButton.style.display = "block";
+        this.readyButton.style.display = "none";
+        this.characterSelection.style.display = "none";
+        this.readyButton.textContent = "Ready";
+        this.readyButton.disabled = false;
+        this.pauseMenu.style.display = "none";
+    }
+
+    private setupCharacterSelection(): void {
+        const buttons = Array.from(this.characterOptions.getElementsByTagName("button"));
+        for (let button of buttons) {
+            button.addEventListener("click", () => {
+                this.selectedCharacter = button.dataset.model!;
+                this.characterPreview.style.backgroundImage = `url(/assets/characters/${this.selectedCharacter.replace('.glb', '.png')})`; // Assuming preview images exist
+                this.readyButton.style.display = "block";
+            });
+        }
     }
 
     private updateAmmoWarning(): void {
@@ -230,19 +283,21 @@ class App {
         const spark = new THREE.Mesh(sparkGeometry, sparkMaterial);
         spark.position.copy(position);
         this.scene.add(spark);
-        this.sparks.push({ mesh: spark, lifetime: 500 }); // 500ms lifetime
+        this.sparks.push({ mesh: spark, lifetime: 500 });
     }
 
     private async createScene(): Promise<void> {
-        // Hero
-        const heroGeometry = new THREE.BoxGeometry(2, 2, 2);
-        const heroMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
-        this.hero = new THREE.Mesh(heroGeometry, heroMaterial);
-        this.hero.position.set(0, 1.2, 0);
+        const gltfLoader = new GLTFLoader();
+
+        // Load hero character
+        const heroGltf = await gltfLoader.loadAsync(`/assets/characters/${this.selectedCharacter}`);
+        this.hero = heroGltf.scene;
+        this.hero.scale.set(1, 1, 1);
+        this.hero.position.set(0, 0, 0); // Adjust based on model origin
         this.scene.add(this.hero);
         this.heroBody = new CANNON.Body({ mass: 1 });
-        this.heroBody.addShape(new CANNON.Box(new CANNON.Vec3(1, 1, 1)));
-        this.heroBody.position.set(0, 1.2, 0);
+        this.heroBody.addShape(new CANNON.Box(new CANNON.Vec3(0.5, 1, 0.5))); // Approximate size
+        this.heroBody.position.set(0, 1, 0);
         this.world.addBody(this.heroBody);
 
         // Ground with Texture
@@ -262,7 +317,7 @@ class App {
         groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
         this.world.addBody(groundBody);
 
-        // Streets and Sidewalks
+        // Streets and Sidewalks (unchanged for brevity)
         const streetWidth = 20;
         const sidewalkWidth = 5;
         const streetMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
@@ -306,7 +361,7 @@ class App {
             this.scene.add(sidewalkZ2);
         }
 
-        // Night Sky with Stars
+        // Night Sky with Stars (unchanged for brevity)
         const skyGeometry = new THREE.SphereGeometry(1000, 32, 32);
         const skyMaterial = new THREE.MeshBasicMaterial({ color: 0x001133, side: THREE.BackSide });
         const sky = new THREE.Mesh(skyGeometry, skyMaterial);
@@ -324,7 +379,7 @@ class App {
         const stars = new THREE.Points(starGeometry, starMaterial);
         this.scene.add(stars);
 
-        // Adjusted Lighting
+        // Adjusted Lighting (unchanged for brevity)
         const ambientLight = new THREE.AmbientLight(0x404060, 0.8);
         this.scene.add(ambientLight);
         const light1 = new THREE.DirectionalLight(0x8080ff, 0.5);
@@ -338,9 +393,8 @@ class App {
         light3.position.set(0, 90, -150);
         this.scene.add(light3);
 
-        // Load Models (Buildings and Cars)
-        const gltfLoader = new GLTFLoader();
-        const loadModel = (path: string, position: THREE.Vector3, scale: number, rotationY = 0): Promise<THREE.Group> => {
+        // Load Models (Buildings and Cars) - unchanged for brevity
+        const loadModel = (path: string, position: THREE.Vector3, scale: number, rotationY = 0): Promise<THREE.Object3D> => {
             return new Promise((resolve) => {
                 gltfLoader.load(path, (gltf) => {
                     const model = gltf.scene;
@@ -365,7 +419,6 @@ class App {
             });
         };
 
-        // Building Types
         const skyscrapers = ["skyscraperA.glb", "skyscraperB.glb", "skyscraperC.glb", "skyscraperD.glb", "skyscraperE.glb", "skyscraperF.glb"];
         const largeBuildings = ["large_buildingA.glb", "large_buildingB.glb", "large_buildingC.glb", "large_buildingD.glb", "large_buildingE.glb", "large_buildingF.glb", "large_buildingG.glb"];
         const lowBuildings = ["low_buildingA.glb", "low_buildingB.glb", "low_buildingC.glb", "low_buildingD.glb", "low_buildingE.glb", "low_buildingF.glb", "low_buildingG.glb", "low_buildingH.glb", "low_buildingI.glb", "low_buildingJ.glb", "low_buildingK.glb", "low_buildingL.glb", "low_buildingM.glb", "low_buildingN.glb", "low_wideA.glb", "low_wideB.glb"];
@@ -378,7 +431,6 @@ class App {
             "tractor-police.glb", "tractor-shovel.glb", "tractor.glb", "truck-flat.glb", "truck.glb", "van.glb"
         ];
 
-        // Downtown: Dense skyscrapers with video screen
         const downtownCenter = new THREE.Vector3(0, 0, 0);
         for (let i = 0; i < 15; i++) {
             const model = skyscrapers[Math.floor(Math.random() * skyscrapers.length)];
@@ -402,7 +454,6 @@ class App {
             }
         }
 
-        // Mid-rise: Mixed large and low buildings along streets
         for (let x = -450; x <= 450; x += 90) {
             for (let z = -450; z <= 450; z += 90) {
                 if (Math.abs(x - downtownCenter.x) > 100 || Math.abs(z - downtownCenter.z) > 100) {
@@ -416,7 +467,6 @@ class App {
             }
         }
 
-        // Suburbs: Small buildings and details
         for (let i = 0; i < 30; i++) {
             const model = smallBuildings[Math.floor(Math.random() * smallBuildings.length)];
             const x = Math.round((Math.random() * 900 - 450) / 90) * 90 + (streetWidth + sidewalkWidth);
@@ -447,7 +497,7 @@ class App {
             this.scene.add(trunk, foliage);
         }
 
-        // Streetlights (max 10)
+        // Streetlights
         const lightMaterial = new THREE.MeshStandardMaterial({ color: 0xaaaaaa });
         const lightPositions = [];
         for (let i = 0; i < 10; i++) {
@@ -549,33 +599,42 @@ class App {
 
     private updateOtherPlayer(socketId: string, player: PlayerData): void {
         if (!this.otherPlayers.has(socketId)) {
-            const geometry = new THREE.BoxGeometry(2, 2, 2);
-            const material = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
-            const mesh = new THREE.Mesh(geometry, material);
-            this.scene.add(mesh);
+            const gltfLoader = new GLTFLoader();
+            gltfLoader.load(`/assets/characters/${player.avatar || 'character-male-a.glb'}`, (gltf) => {
+                const mesh = gltf.scene;
+                mesh.scale.set(1, 1, 1);
+                this.scene.add(mesh);
 
-            const textGeometry = new THREE.PlaneGeometry(2, 0.5);
-            const textMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true });
-            const nameTag = new THREE.Mesh(textGeometry, textMaterial);
-            nameTag.position.y = 2.5;
-            nameTag.userData = { name: player.name };
-            mesh.add(nameTag);
+                const textGeometry = new THREE.PlaneGeometry(2, 0.5);
+                const textMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true });
+                const nameTag = new THREE.Mesh(textGeometry, textMaterial);
+                nameTag.position.y = 2.5;
+                nameTag.userData = { name: player.name };
+                mesh.add(nameTag);
 
-            const healthBarGeometry = new THREE.PlaneGeometry(2, 0.2);
-            const healthBarMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
-            const healthBar = new THREE.Mesh(healthBarGeometry, healthBarMaterial);
-            healthBar.position.y = 2.2;
-            mesh.add(healthBar);
+                const healthBarGeometry = new THREE.PlaneGeometry(2, 0.2);
+                const healthBarMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+                const healthBar = new THREE.Mesh(healthBarGeometry, healthBarMaterial);
+                healthBar.position.y = 2.2;
+                mesh.add(healthBar);
 
-            this.otherPlayers.set(socketId, { mesh, nameTag, healthBar });
+                this.otherPlayers.set(socketId, { mesh, nameTag, healthBar });
+                this.updateOtherPlayerPosition(socketId, player);
+            });
+        } else {
+            this.updateOtherPlayerPosition(socketId, player);
         }
+    }
 
-        const playerObj = this.otherPlayers.get(socketId)!;
-        playerObj.mesh.position.set(player.position.x, player.position.y, player.position.z);
-        playerObj.mesh.rotation.set(player.rotation.x, player.rotation.y, player.rotation.z);
-        const healthPercentage = player.health / 100;
-        playerObj.healthBar.scale.x = healthPercentage;
-        playerObj.healthBar.material.color.setHSL(healthPercentage * 0.33, 1, 0.5);
+    private updateOtherPlayerPosition(socketId: string, player: PlayerData): void {
+        const playerObj = this.otherPlayers.get(socketId);
+        if (playerObj) {
+            playerObj.mesh.position.set(player.position.x, player.position.y, player.position.z);
+            playerObj.mesh.rotation.set(player.rotation.x, player.rotation.y, player.rotation.z);
+            const hitPercentage = 1 - (player.hits / 3);
+            playerObj.healthBar.scale.x = hitPercentage;
+            playerObj.healthBar.material.color.setHSL(hitPercentage * 0.33, 1, 0.5);
+        }
     }
 
     private spawnBullet(origin: any, direction: any, owner: string): void {
@@ -604,7 +663,12 @@ class App {
 
     private setupInput(): void {
         this.canvas.addEventListener("click", () => {
-            if (!this.isPaused && this.lobby.style.display === "none") this.canvas.requestPointerLock();
+            if (!this.isPaused && this.lobby.style.display === "none" && !document.pointerLockElement) {
+                this.canvas.requestPointerLock().catch(() => {
+                    this.isPaused = true;
+                    this.pauseMenu.style.display = "block";
+                });
+            }
         });
 
         document.addEventListener("keydown", (event) => {
@@ -626,7 +690,7 @@ class App {
                 case 65: this.moveLeft = false; break;
                 case 32: this.jump = false; break;
                 case 27:
-                    if (!this.isPaused) {
+                    if (!this.isPaused && document.pointerLockElement) {
                         this.isPaused = true;
                         this.pauseMenu.style.display = "block";
                         document.exitPointerLock();
@@ -638,7 +702,12 @@ class App {
         this.resumeButton.addEventListener("click", () => {
             this.isPaused = false;
             this.pauseMenu.style.display = "none";
-            this.canvas.requestPointerLock();
+            if (this.lobby.style.display === "none") {
+                this.canvas.requestPointerLock().catch(() => {
+                    this.isPaused = true;
+                    this.pauseMenu.style.display = "block";
+                });
+            }
         });
 
         document.addEventListener("mousemove", (event) => {
@@ -648,6 +717,11 @@ class App {
             this.mouseX -= movementX * 0.002;
             this.mouseY -= movementY * 0.002;
             this.mouseY = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.mouseY));
+        });
+
+        document.addEventListener("pointerlockerror", () => {
+            this.isPaused = true;
+            this.pauseMenu.style.display = "block";
         });
 
         this.canvas.addEventListener("mousedown", () => {
@@ -710,7 +784,6 @@ class App {
                 bullet.mesh.position.copy(bullet.body.position);
                 bullet.mesh.quaternion.copy(bullet.body.quaternion);
 
-                // Check collision with local player
                 const heroDistance = bullet.mesh.position.distanceTo(this.hero.position);
                 if (bullet.owner !== this.socket.id && heroDistance < 2) {
                     this.socket.emit("playerHit", { targetSocketId: this.socket.id });
@@ -721,7 +794,6 @@ class App {
                     return;
                 }
 
-                // Check collision with other players
                 this.otherPlayers.forEach((playerObj, socketId) => {
                     if (bullet.owner !== socketId) {
                         const distance = bullet.mesh.position.distanceTo(playerObj.mesh.position);
@@ -736,7 +808,6 @@ class App {
                 });
             });
 
-            // Ammo pickup
             this.ammoPickups.forEach((pickup, index) => {
                 const distance = this.hero.position.distanceTo(pickup.mesh.position);
                 if (distance < 3) {
@@ -749,7 +820,6 @@ class App {
                 }
             });
 
-            // Thunder boost pickup
             this.thunderBoosts.forEach((boost, index) => {
                 const distance = this.hero.position.distanceTo(boost.mesh.position);
                 if (distance < 3) {
@@ -767,18 +837,16 @@ class App {
                 }
             });
 
-            // Update sparks
             this.sparks.forEach((spark, index) => {
-                spark.lifetime -= 16.67; // Approx 1/60th of a second
+                spark.lifetime -= 16.67;
                 if (spark.lifetime <= 0) {
                     this.scene.remove(spark.mesh);
                     this.sparks.splice(index, 1);
                 } else {
-                    spark.mesh.scale.multiplyScalar(0.95); // Fade out effect
+                    spark.mesh.scale.multiplyScalar(0.95);
                 }
             });
 
-            // Blink "Out of Ammo" warning
             if (this.ammo <= 0) {
                 this.blinkTimer += 16.67;
                 if (this.blinkTimer >= this.blinkInterval) {
@@ -786,14 +854,12 @@ class App {
                     this.blinkTimer = 0;
                 }
             } else {
-                this.ammoWarning.style.visibility = "visible"; // Reset to visible when ammo > 0 (though hidden by display: none)
+                this.ammoWarning.style.visibility = "visible";
             }
 
             this.renderer.render(this.scene, this.camera);
         }
     }
-
-
 }
 
 window.addEventListener("DOMContentLoaded", () => {
