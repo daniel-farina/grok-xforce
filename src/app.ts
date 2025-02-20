@@ -81,8 +81,19 @@ class App {
     private isReady: boolean = false;
     private blinkTimer: number = 0;
     private blinkInterval: number = 500;
+    private elevator!: { mesh: THREE.Mesh; body: CANNON.Body };
+    private elevatorHeight: number = 160;
+    private elevatorState: "ground" | "rising" | "top" | "falling" = "ground";
+    private elevatorTimer: number = 0;
+    private elevatorWaitTime: number = 5000;
+    private elevatorTravelTime: number = 3000;
+    private elevatorStartY: number = -0.25;
+    private heroReady: boolean = false;
+    private pendingPlayersUpdates: Array<{ [socketId: string]: PlayerData }> = [];
+    private lastPlayersUpdateTimestamp: number = 0;
+    private debounceInterval: number = 100; // 100ms debounce
+    private loadingPlayers: Set<string> = new Set(); // Track players being loaded
 
-    // Initialization Functions
     constructor() {
         this.initialize();
     }
@@ -133,7 +144,6 @@ class App {
         }
     }
 
-    // Socket Event Functions
     private setupSocketEvents(): void {
         this.joinButton.addEventListener("click", () => {
             const username = this.usernameInput.value.trim();
@@ -152,7 +162,7 @@ class App {
             }
         });
 
-        this.socket.on("loginSuccess", (data: { roomId: string; playerId: number; name: string }) => {
+        this.socket.on("loginSuccess", (data: { roomId: string; playerId: number; name: string; position?: { x: number; y: number; z: number } }) => {
             this.roomId = data.roomId;
             this.playerId = data.playerId;
             this.playerName = data.name;
@@ -163,26 +173,24 @@ class App {
             this.isReady = true;
             this.readyButton.textContent = "Ready (Waiting)";
             this.readyButton.disabled = true;
-            this.createScene().then(() => this.animate());
+            this.createScene(data.position).then(() => this.animate());
         });
 
         this.socket.on("playersUpdate", (players: { [socketId: string]: PlayerData }) => {
-            Object.entries(players).forEach(([socketId, player]) => {
-                if (socketId === this.socket.id) {
-                    this.lives = player.lives;
-                    this.health = player.health;
-                    this.ammo = player.ammo;
-                    this.hits = player.hits;
-                    this.livesCounter.textContent = `Lives: ${this.lives}`;
-                    this.healthCounter.textContent = `Health: ${this.health}`;
-                    this.ammoCounter.textContent = `Ammo: ${this.ammo}`;
-                    this.updateAmmoWarning();
-                } else {
-                    this.updateOtherPlayer(socketId, player);
-                }
-            });
-            const totalPlayers = Object.keys(players).length;
-            this.lobbyStatus.textContent = `Players in lobby: ${totalPlayers}`;
+            if (!this.heroReady) {
+                console.log("Hero not ready, queuing playersUpdate");
+                this.pendingPlayersUpdates.push(players);
+                return;
+            }
+            this.processPlayersUpdate(players);
+        });
+
+        this.socket.on("elevatorUpdate", (data: { positionY: number; state: string }) => {
+            if (this.elevator) {
+                this.elevator.mesh.position.y = data.positionY;
+                this.elevator.body.position.y = data.positionY;
+                this.elevatorState = data.state as "ground" | "rising" | "top" | "falling";
+            }
         });
 
         this.socket.on("lobbyUpdate", ({ total, ready }: { total: number; ready: number }) => {
@@ -199,17 +207,19 @@ class App {
         });
 
         this.socket.on("playerMoved", (data: { socketId: string; position: any; rotation: any }) => {
-            this.updateOtherPlayer(data.socketId, {
-                socketId: data.socketId,
-                position: data.position,
-                rotation: data.rotation,
-                name: "",
-                health: 100,
-                lives: 5,
-                ammo: 50,
-                ready: false,
-                hits: 0,
-            });
+            if (data.socketId !== this.socket.id) {
+                this.updateOtherPlayer(data.socketId, {
+                    socketId: data.socketId,
+                    position: data.position,
+                    rotation: data.rotation,
+                    name: "",
+                    health: 100,
+                    lives: 5,
+                    ammo: 50,
+                    ready: false,
+                    hits: 0,
+                });
+            }
         });
 
         this.socket.on("playerShot", (data: { socketId: string; origin: any; direction: any }) => {
@@ -234,7 +244,33 @@ class App {
         });
     }
 
-    // UI and Input Functions
+    private processPlayersUpdate(players: { [socketId: string]: PlayerData }): void {
+        const now = Date.now();
+        if (now - this.lastPlayersUpdateTimestamp < this.debounceInterval) {
+            console.log("Debouncing duplicate playersUpdate");
+            return;
+        }
+        this.lastPlayersUpdateTimestamp = now;
+
+        console.log("Processing playersUpdate:", Object.keys(players));
+        Object.entries(players).forEach(([socketId, player]) => {
+            if (socketId === this.socket.id) {
+                this.lives = player.lives;
+                this.health = player.health;
+                this.ammo = player.ammo;
+                this.hits = player.hits;
+                this.livesCounter.textContent = `Lives: ${this.lives}`;
+                this.healthCounter.textContent = `Health: ${this.health}`;
+                this.ammoCounter.textContent = `Ammo: ${this.ammo}`;
+                this.updateAmmoWarning();
+            } else {
+                this.updateOtherPlayer(socketId, player);
+            }
+        });
+        const totalPlayers = Object.keys(players).length;
+        this.lobbyStatus.textContent = `Players in lobby: ${totalPlayers}`;
+    }
+
     private setupInput(): void {
         this.canvas.addEventListener("click", () => {
             if (!this.isPaused && this.lobby.style.display === "none" && !document.pointerLockElement) {
@@ -341,10 +377,13 @@ class App {
         this.camera.updateProjectionMatrix();
     }
 
-    // Game Logic Functions
     private resetGameForNewRoom(): void {
         this.roomId = null;
         this.isReady = false;
+        this.heroReady = false;
+        this.pendingPlayersUpdates = [];
+        this.loadingPlayers.clear();
+        this.otherPlayers.forEach((playerObj) => this.scene.remove(playerObj.mesh));
         this.otherPlayers.clear();
         this.bullets.forEach(bullet => {
             this.scene.remove(bullet.mesh);
@@ -353,8 +392,8 @@ class App {
         this.bullets = [];
         this.sparks.forEach(spark => this.scene.remove(spark.mesh));
         this.sparks = [];
-        this.scene.remove(this.hero);
-        this.world.removeBody(this.heroBody);
+        if (this.hero) this.scene.remove(this.hero);
+        if (this.heroBody) this.world.removeBody(this.heroBody);
         this.lobby.style.display = "block";
         this.lobbyTitle.textContent = "Enter Username";
         this.usernameInput.style.display = "block";
@@ -399,23 +438,23 @@ class App {
         this.sparks.push({ mesh: spark, lifetime: 500 });
     }
 
-    // Scene Creation Functions
-    private async createScene(): Promise<void> {
+    private async createScene(initialPosition?: { x: number; y: number; z: number }): Promise<void> {
         const gltfLoader = new GLTFLoader();
-
-        // Load hero character
         const heroGltf = await gltfLoader.loadAsync(`/assets/characters/${this.selectedCharacter}`);
         this.hero = heroGltf.scene;
         this.hero.scale.set(2, 2, 2);
-        this.hero.position.set(0, 0, 0);
+        this.hero.position.set(initialPosition?.x || 0, initialPosition?.y || 0, initialPosition?.z || 0);
         this.hero.rotation.set(0, 0, 0);
         this.scene.add(this.hero);
         this.heroBody = new CANNON.Body({ mass: 1 });
         this.heroBody.addShape(new CANNON.Box(new CANNON.Vec3(0.5 * 2, 1 * 2, 0.5 * 2)));
-        this.heroBody.position.set(0, 1, 0);
+        this.heroBody.position.set(initialPosition?.x || 0, initialPosition?.y || 1, initialPosition?.z || 0);
         this.world.addBody(this.heroBody);
+        this.heroReady = true;
+        while (this.pendingPlayersUpdates.length > 0) {
+            this.processPlayersUpdate(this.pendingPlayersUpdates.shift()!);
+        }
 
-        // Ground with Texture
         const textureLoader = new THREE.TextureLoader();
         const groundTexture = textureLoader.load('/assets/textures/ground.jpg');
         groundTexture.wrapS = groundTexture.wrapT = THREE.RepeatWrapping;
@@ -432,7 +471,6 @@ class App {
         groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
         this.world.addBody(groundBody);
 
-        // Streets and Sidewalks
         const streetWidth = 20;
         const sidewalkWidth = 5;
         const streetMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
@@ -476,7 +514,18 @@ class App {
             this.scene.add(sidewalkZ2);
         }
 
-        // Night Sky with Stars
+        const elevatorGeometry = new THREE.BoxGeometry(60, 1, 60);
+        const elevatorMaterial = new THREE.MeshStandardMaterial({ color: 0x666666 });
+        const elevatorMesh = new THREE.Mesh(elevatorGeometry, elevatorMaterial);
+        elevatorMesh.position.set(0, -0.25, 0);
+        this.scene.add(elevatorMesh);
+
+        const elevatorBody = new CANNON.Body({ mass: 0 });
+        elevatorBody.addShape(new CANNON.Box(new CANNON.Vec3(30, 0.5, 30)));
+        elevatorBody.position.set(0, -0.25, 0);
+        this.world.addBody(elevatorBody);
+        this.elevator = { mesh: elevatorMesh, body: elevatorBody };
+
         const skyGeometry = new THREE.SphereGeometry(1000, 32, 32);
         const skyMaterial = new THREE.MeshBasicMaterial({ color: 0x001133, side: THREE.BackSide });
         const sky = new THREE.Mesh(skyGeometry, skyMaterial);
@@ -494,7 +543,6 @@ class App {
         const stars = new THREE.Points(starGeometry, starMaterial);
         this.scene.add(stars);
 
-        // Adjusted Lighting
         const ambientLight = new THREE.AmbientLight(0x404060, 0.8);
         this.scene.add(ambientLight);
         const light1 = new THREE.DirectionalLight(0x8080ff, 0.5);
@@ -508,7 +556,6 @@ class App {
         light3.position.set(0, 90, -150);
         this.scene.add(light3);
 
-        // Load Models (Buildings and Cars)
         const loadModel = (path: string, position: THREE.Vector3, scale: number, rotationY = 0): Promise<THREE.Object3D> => {
             return new Promise((resolve) => {
                 gltfLoader.load(path, (gltf) => {
@@ -542,10 +589,10 @@ class App {
         const cars = ["ambulance.glb", "box.glb", "cone-flat.glb", "cone.glb", "delivery-flat.glb", "delivery.glb", "firetruck.glb", "garbage-truck.glb", "hatchback-sports.glb", "police.glb", "race-future.glb", "race.glb", "sedan-sports.glb", "sedan.glb", "suv-luxury.glb", "suv.glb", "taxi.glb", "tractor-police.glb", "tractor-shovel.glb", "tractor.glb", "truck-flat.glb", "truck.glb", "van.glb"];
 
         const downtownCenter = new THREE.Vector3(0, 0, 0);
-        for (let i = 0; i < 15; i++) {
+        for (let i = 0; i < 8; i++) {
             const model = skyscrapers[Math.floor(Math.random() * skyscrapers.length)];
             const angle = (i / 15) * Math.PI * 2;
-            const radius = 50 + Math.random() * 30;
+            const radius = 100 + Math.random() * 50;
             const x = Math.round((downtownCenter.x + Math.cos(angle) * radius) / 90) * 90 + (streetWidth + sidewalkWidth);
             const z = Math.round((downtownCenter.z + Math.sin(angle) * radius) / 90) * 90 + (streetWidth + sidewalkWidth);
             const rotationY = Math.random() * Math.PI * 2;
@@ -586,6 +633,7 @@ class App {
                 await loadModel(`/assets/models/${model}`, new THREE.Vector3(x, 0, z), 15, rotationY);
             }
         }
+
         for (let i = 0; i < 50; i++) {
             const model = details[Math.floor(Math.random() * details.length)];
             const x = Math.round((Math.random() * 900 - 450) / 90) * 90 + (streetWidth / 2 + sidewalkWidth / 2);
@@ -594,7 +642,6 @@ class App {
             await loadModel(`/assets/models/${model}`, new THREE.Vector3(x, 0, z), 5, rotationY);
         }
 
-        // Trees
         const treeMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22 });
         for (let i = 0; i < 50; i++) {
             const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 5), treeMaterial);
@@ -607,7 +654,6 @@ class App {
             this.scene.add(trunk, foliage);
         }
 
-        // Streetlights
         const lightMaterial = new THREE.MeshStandardMaterial({ color: 0xaaaaaa });
         const lightPositions = [];
         for (let i = 0; i < 10; i++) {
@@ -627,7 +673,6 @@ class App {
             this.scene.add(pointLight);
         });
 
-        // Vehicles
         for (let i = 0; i < 20; i++) {
             const carModel = cars[Math.floor(Math.random() * cars.length)];
             const x = Math.round((Math.random() * 900 - 450) / 90) * 90;
@@ -639,17 +684,15 @@ class App {
                 });
         }
 
-        // Video Plane
         const videoTexture = new THREE.VideoTexture(video);
         videoTexture.minFilter = THREE.LinearFilter;
         videoTexture.magFilter = THREE.LinearFilter;
         const screenMaterial = new THREE.MeshBasicMaterial({ map: videoTexture, side: THREE.DoubleSide });
         const screenGeometry = new THREE.PlaneGeometry(200, 100);
         this.videoPlane = new THREE.Mesh(screenGeometry, screenMaterial);
-        this.videoPlane.position.set(200, 25, 10);
+        this.videoPlane.position.set(250, 25, 10);
         this.scene.add(this.videoPlane);
 
-        // Ammo Pickups
         const ammoMaterial = new THREE.MeshStandardMaterial({ color: 0xffff00 });
         for (let i = 0; i < 80; i++) {
             const ammoBox = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), ammoMaterial);
@@ -664,14 +707,13 @@ class App {
             this.ammoPickups.push({ mesh: ammoBox, body: ammoBody });
         }
 
-        // Thunder Speed Boosts
         const thunderGeometry = new THREE.ConeGeometry(0.5, 2, 8);
         const thunderMaterial = new THREE.MeshStandardMaterial({ 
             color: 0x00ffff,
             emissive: 0x00ffff,
             emissiveIntensity: 0.5 
         });
-        for (let i = 0; i < 40; i++) {
+        for (let i = 0; i < 100; i++) {
             const thunder = new THREE.Mesh(thunderGeometry, thunderMaterial);
             const x = Math.round((Math.random() * 900 - 450) / 90) * 90 + (streetWidth / 2 + sidewalkWidth / 2);
             const z = Math.round((Math.random() * 900 - 450) / 90) * 90 + (streetWidth / 2 + sidewalkWidth / 2);
@@ -685,7 +727,6 @@ class App {
             this.thunderBoosts.push({ mesh: thunder, body: thunderBody });
         }
 
-        // Borders
         const borderMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff });
         const borders = [
             { size: [5, 100, 1000], pos: [-500, 50, 0] },
@@ -708,33 +749,41 @@ class App {
     }
 
     private updateOtherPlayer(socketId: string, player: PlayerData): void {
-        if (!this.otherPlayers.has(socketId)) {
-            const gltfLoader = new GLTFLoader();
-            gltfLoader.load(`/assets/characters/${player.avatar || 'character-male-a.glb'}`, (gltf) => {
-                const mesh = gltf.scene;
-                mesh.scale.set(2, 2, 2);
-                mesh.rotation.set(0, 0, 0);
-                this.scene.add(mesh);
-
-                const textGeometry = new THREE.PlaneGeometry(2, 0.5);
-                const textMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true });
-                const nameTag = new THREE.Mesh(textGeometry, textMaterial);
-                nameTag.position.y = 5;
-                nameTag.userData = { name: player.name };
-                mesh.add(nameTag);
-
-                const healthBarGeometry = new THREE.PlaneGeometry(2, 0.2);
-                const healthBarMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
-                const healthBar = new THREE.Mesh(healthBarGeometry, healthBarMaterial);
-                healthBar.position.y = 4.4;
-                mesh.add(healthBar);
-
-                this.otherPlayers.set(socketId, { mesh, nameTag, healthBar });
-                this.updateOtherPlayerPosition(socketId, player);
-            });
-        } else {
-            this.updateOtherPlayerPosition(socketId, player);
+        if (socketId === this.socket.id) {
+            console.warn(`Attempted to update local player ${socketId} as other player - skipping`);
+            return;
         }
+        if (this.otherPlayers.has(socketId) || this.loadingPlayers.has(socketId)) {
+            this.updateOtherPlayerPosition(socketId, player);
+            return;
+        }
+
+        console.log(`Adding new player: ${socketId}`);
+        this.loadingPlayers.add(socketId);
+        const gltfLoader = new GLTFLoader();
+        gltfLoader.load(`/assets/characters/${player.avatar || 'character-male-a.glb'}`, (gltf) => {
+            const mesh = gltf.scene;
+            mesh.scale.set(2, 2, 2);
+            mesh.rotation.set(0, 0, 0);
+            this.scene.add(mesh);
+
+            const textGeometry = new THREE.PlaneGeometry(2, 0.5);
+            const textMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true });
+            const nameTag = new THREE.Mesh(textGeometry, textMaterial);
+            nameTag.position.y = 5;
+            nameTag.userData = { name: player.name };
+            mesh.add(nameTag);
+
+            const healthBarGeometry = new THREE.PlaneGeometry(2, 0.2);
+            const healthBarMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+            const healthBar = new THREE.Mesh(healthBarGeometry, healthBarMaterial);
+            healthBar.position.y = 4.4;
+            mesh.add(healthBar);
+
+            this.otherPlayers.set(socketId, { mesh, nameTag, healthBar });
+            this.loadingPlayers.delete(socketId);
+            this.updateOtherPlayerPosition(socketId, player);
+        });
     }
 
     private updateOtherPlayerPosition(socketId: string, player: PlayerData): void {
@@ -748,12 +797,59 @@ class App {
         }
     }
 
-    // Rendering Function
     private animate(): void {
         requestAnimationFrame(() => this.animate());
 
         if (!this.isPaused && this.roomId) {
             this.world.step(1 / 60);
+
+            if (this.elevator) {
+                this.elevatorTimer += 16.67;
+                let targetY: number;
+                let progress: number;
+
+                switch (this.elevatorState) {
+                    case "ground":
+                        if (this.elevatorTimer >= this.elevatorWaitTime) {
+                            this.elevatorState = "rising";
+                            this.elevatorTimer = 0;
+                        }
+                        break;
+                    case "rising":
+                        progress = Math.min(this.elevatorTimer / this.elevatorTravelTime, 1);
+                        targetY = this.elevatorStartY + (this.elevatorHeight - this.elevatorStartY) * progress;
+                        this.elevator.mesh.position.y = targetY;
+                        this.elevator.body.position.y = targetY;
+                        if (progress === 1) {
+                            this.elevatorState = "top";
+                            this.elevatorTimer = 0;
+                        }
+                        break;
+                    case "top":
+                        if (this.elevatorTimer >= this.elevatorWaitTime) {
+                            this.elevatorState = "falling";
+                            this.elevatorTimer = 0;
+                        }
+                        break;
+                    case "falling":
+                        progress = Math.min(this.elevatorTimer / this.elevatorTravelTime, 1);
+                        targetY = this.elevatorHeight - (this.elevatorHeight - this.elevatorStartY) * progress;
+                        this.elevator.mesh.position.y = targetY;
+                        this.elevator.body.position.y = targetY;
+                        if (progress === 1) {
+                            this.elevatorState = "ground";
+                            this.elevatorTimer = 0;
+                        }
+                        break;
+                }
+
+                const heroBox = new THREE.Box3().setFromObject(this.hero);
+                const elevatorBox = new THREE.Box3().setFromObject(this.elevator.mesh);
+                if (heroBox.intersectsBox(elevatorBox) && this.hero.position.y <= this.elevator.mesh.position.y + 0.5) {
+                    this.heroBody.position.y = this.elevator.body.position.y + 2;
+                    this.hero.position.y = this.elevator.mesh.position.y + 2;
+                }
+            }
 
             this.hero.position.copy(this.heroBody.position);
             this.hero.rotation.y = this.camera.rotation.y;
