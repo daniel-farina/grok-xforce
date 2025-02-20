@@ -35,7 +35,7 @@ class App {
     private thunderBoosts: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
     private bullets: { mesh: THREE.Mesh; body: CANNON.Body; owner: string }[] = [];
     private buildings: { mesh: THREE.Object3D; body: CANNON.Body }[] = [];
-    private ammo: number = 5; // 5 bullets per life
+    private ammo: number = 5;
     private lives: number = 5;
     private health: number = 100;
     private moveForward: boolean = false;
@@ -53,7 +53,7 @@ class App {
     private lobbyTitle: HTMLElement;
     private resumeButton: HTMLElement;
     private joinButton: HTMLElement;
-    private readyButton: HTMLButtonElement; // Fixed type
+    private readyButton: HTMLButtonElement;
     private usernameInput: HTMLInputElement;
     private lobbyStatus: HTMLElement;
     private countdown: HTMLElement;
@@ -148,7 +148,14 @@ class App {
 
         this.socket.on("playersUpdate", (players: { [socketId: string]: PlayerData }) => {
             Object.entries(players).forEach(([socketId, player]) => {
-                if (socketId !== this.socket.id) {
+                if (socketId === this.socket.id) {
+                    this.lives = player.lives;
+                    this.health = player.health;
+                    this.ammo = player.ammo;
+                    this.livesCounter.textContent = `Lives: ${this.lives}`;
+                    this.healthCounter.textContent = `Health: ${this.health}`;
+                    this.ammoCounter.textContent = `Ammo: ${this.ammo}`;
+                } else {
                     this.updateOtherPlayer(socketId, player);
                 }
             });
@@ -187,18 +194,7 @@ class App {
         });
 
         this.socket.on("playerHitEffect", (data: { targetSocketId: string }) => {
-            if (data.targetSocketId === this.socket.id) {
-                this.health -= 20;
-                this.healthCounter.textContent = `Health: ${this.health}`;
-                if (this.health <= 0) {
-                    this.lives--;
-                    this.livesCounter.textContent = `Lives: ${this.lives}`;
-                    this.health = 100;
-                    this.ammo = 5;
-                    this.healthCounter.textContent = `Health: ${this.health}`;
-                    this.ammoCounter.textContent = `Ammo: ${this.ammo}`;
-                }
-            }
+            // Visual feedback handled by playersUpdate
         });
 
         this.socket.on("playerOut", () => {
@@ -556,7 +552,7 @@ class App {
         playerObj.mesh.rotation.set(player.rotation.x, player.rotation.y, player.rotation.z);
         const healthPercentage = player.health / 100;
         playerObj.healthBar.scale.x = healthPercentage;
-        playerObj.healthBar.material.color.setHSL(healthPercentage * 0.33, 1, 0.5); // Green to red gradient
+        playerObj.healthBar.material.color.setHSL(healthPercentage * 0.33, 1, 0.5);
     }
 
     private spawnBullet(origin: any, direction: any, owner: string): void {
@@ -690,7 +686,6 @@ class App {
                 bullet.mesh.position.copy(bullet.body.position);
                 bullet.mesh.quaternion.copy(bullet.body.quaternion);
 
-                // Check for collisions with other players
                 this.otherPlayers.forEach((playerObj, socketId) => {
                     if (bullet.owner !== socketId) {
                         const distance = bullet.mesh.position.distanceTo(playerObj.mesh.position);
@@ -707,7 +702,7 @@ class App {
                 });
             });
 
-            // Ammo pickup with increased proximity
+            // Ammo pickup
             this.ammoPickups.forEach((pickup, index) => {
                 const distance = this.hero.position.distanceTo(pickup.mesh.position);
                 if (distance < 3) {
@@ -719,7 +714,7 @@ class App {
                 }
             });
 
-            // Thunder boost pickup with increased proximity
+            // Thunder boost pickup
             this.thunderBoosts.forEach((boost, index) => {
                 const distance = this.hero.position.distanceTo(boost.mesh.position);
                 if (distance < 3) {
