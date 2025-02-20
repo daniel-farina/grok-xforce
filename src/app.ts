@@ -30,12 +30,14 @@ class App {
     private canvas: HTMLCanvasElement;
     private hero: THREE.Mesh;
     private heroBody: CANNON.Body;
-    private otherPlayers: Map<string, { mesh: THREE.Mesh; nameTag: THREE.Mesh }> = new Map();
+    private otherPlayers: Map<string, { mesh: THREE.Mesh; nameTag: THREE.Mesh; healthBar: THREE.Mesh }> = new Map();
     private ammoPickups: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
     private thunderBoosts: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
-    private bullets: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
+    private bullets: { mesh: THREE.Mesh; body: CANNON.Body; owner: string }[] = [];
     private buildings: { mesh: THREE.Object3D; body: CANNON.Body }[] = [];
-    private ammo: number = 30;
+    private ammo: number = 5; // 5 bullets per life
+    private lives: number = 5;
+    private health: number = 100;
     private moveForward: boolean = false;
     private moveBackward: boolean = false;
     private moveRight: boolean = false;
@@ -44,12 +46,14 @@ class App {
     private isPaused: boolean = false;
     private ammoCounter: HTMLElement;
     private speedBoostCounter: HTMLElement;
+    private livesCounter: HTMLElement;
+    private healthCounter: HTMLElement;
     private pauseMenu: HTMLElement;
     private lobby: HTMLElement;
     private lobbyTitle: HTMLElement;
     private resumeButton: HTMLElement;
     private joinButton: HTMLElement;
-    private readyButton: HTMLElement;
+    private readyButton: HTMLButtonElement; // Fixed type
     private usernameInput: HTMLInputElement;
     private lobbyStatus: HTMLElement;
     private countdown: HTMLElement;
@@ -79,12 +83,14 @@ class App {
             this.canvas = getCanvas();
             this.ammoCounter = document.getElementById("ammoCounter") as HTMLElement;
             this.speedBoostCounter = document.getElementById("speedBoostCounter") as HTMLElement;
+            this.livesCounter = document.getElementById("livesCounter") as HTMLElement;
+            this.healthCounter = document.getElementById("healthCounter") as HTMLElement;
             this.pauseMenu = document.getElementById("pauseMenu") as HTMLElement;
             this.lobby = document.getElementById("lobby") as HTMLElement;
             this.lobbyTitle = document.getElementById("lobbyTitle") as HTMLElement;
             this.resumeButton = document.getElementById("resumeButton") as HTMLElement;
             this.joinButton = document.getElementById("joinButton") as HTMLElement;
-            this.readyButton = document.getElementById("readyButton") as HTMLElement;
+            this.readyButton = document.getElementById("readyButton") as HTMLButtonElement;
             this.usernameInput = document.getElementById("usernameInput") as HTMLInputElement;
             this.lobbyStatus = document.getElementById("lobbyStatus") as HTMLElement;
             this.countdown = document.getElementById("countdown") as HTMLElement;
@@ -171,17 +177,28 @@ class App {
                 name: "",
                 health: 100,
                 lives: 5,
-                ammo: 50,
+                ammo: 5,
                 ready: false,
             });
         });
 
         this.socket.on("playerShot", (data: { socketId: string; origin: any; direction: any }) => {
-            this.spawnBullet(data.origin, data.direction);
+            this.spawnBullet(data.origin, data.direction, data.socketId);
         });
 
         this.socket.on("playerHitEffect", (data: { targetSocketId: string }) => {
-            // Add visual feedback for hits if desired
+            if (data.targetSocketId === this.socket.id) {
+                this.health -= 20;
+                this.healthCounter.textContent = `Health: ${this.health}`;
+                if (this.health <= 0) {
+                    this.lives--;
+                    this.livesCounter.textContent = `Lives: ${this.lives}`;
+                    this.health = 100;
+                    this.ammo = 5;
+                    this.healthCounter.textContent = `Health: ${this.health}`;
+                    this.ammoCounter.textContent = `Ammo: ${this.ammo}`;
+                }
+            }
         });
 
         this.socket.on("playerOut", () => {
@@ -525,15 +542,24 @@ class App {
             nameTag.userData = { name: player.name };
             mesh.add(nameTag);
 
-            this.otherPlayers.set(socketId, { mesh, nameTag });
+            const healthBarGeometry = new THREE.PlaneGeometry(2, 0.2);
+            const healthBarMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+            const healthBar = new THREE.Mesh(healthBarGeometry, healthBarMaterial);
+            healthBar.position.y = 2.2;
+            mesh.add(healthBar);
+
+            this.otherPlayers.set(socketId, { mesh, nameTag, healthBar });
         }
 
         const playerObj = this.otherPlayers.get(socketId)!;
         playerObj.mesh.position.set(player.position.x, player.position.y, player.position.z);
         playerObj.mesh.rotation.set(player.rotation.x, player.rotation.y, player.rotation.z);
+        const healthPercentage = player.health / 100;
+        playerObj.healthBar.scale.x = healthPercentage;
+        playerObj.healthBar.material.color.setHSL(healthPercentage * 0.33, 1, 0.5); // Green to red gradient
     }
 
-    private spawnBullet(origin: any, direction: any): void {
+    private spawnBullet(origin: any, direction: any, owner: string): void {
         const bulletGeometry = new THREE.SphereGeometry(0.3, 16, 16);
         const bulletMaterial = new THREE.MeshStandardMaterial({ color: 0xffff00, emissive: 0xffff00 });
         const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
@@ -545,7 +571,7 @@ class App {
         bulletBody.position.set(origin.x, origin.y, origin.z);
         bulletBody.velocity.set(direction.x * 100, direction.y * 100, direction.z * 100);
         this.world.addBody(bulletBody);
-        this.bullets.push({ mesh: bullet, body: bulletBody });
+        this.bullets.push({ mesh: bullet, body: bulletBody, owner });
 
         setTimeout(() => {
             const index = this.bullets.findIndex((b) => b.mesh === bullet);
@@ -616,7 +642,7 @@ class App {
                 direction: direction,
             });
 
-            this.spawnBullet(this.camera.position, direction);
+            this.spawnBullet(this.camera.position, direction, this.socket.id);
         });
     }
 
@@ -663,6 +689,22 @@ class App {
             this.bullets.forEach((bullet) => {
                 bullet.mesh.position.copy(bullet.body.position);
                 bullet.mesh.quaternion.copy(bullet.body.quaternion);
+
+                // Check for collisions with other players
+                this.otherPlayers.forEach((playerObj, socketId) => {
+                    if (bullet.owner !== socketId) {
+                        const distance = bullet.mesh.position.distanceTo(playerObj.mesh.position);
+                        if (distance < 2) {
+                            this.socket.emit("playerHit", { targetSocketId: socketId });
+                            const bulletIndex = this.bullets.findIndex((b) => b.mesh === bullet.mesh);
+                            if (bulletIndex !== -1) {
+                                this.scene.remove(this.bullets[bulletIndex].mesh);
+                                this.world.removeBody(this.bullets[bulletIndex].body);
+                                this.bullets.splice(bulletIndex, 1);
+                            }
+                        }
+                    }
+                });
             });
 
             // Ammo pickup with increased proximity
