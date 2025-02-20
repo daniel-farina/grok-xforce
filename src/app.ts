@@ -1,15 +1,28 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import * as CANNON from "cannon-es";
+import { io, Socket } from "socket.io-client";
 
-// Video setup for the display
+// Video setup
 const video = document.createElement("video");
 video.src = "/assets/textures/screen_video.mp4";
 video.loop = true;
 video.muted = true;
 video.play();
 
+interface PlayerData {
+    socketId: string;
+    position: { x: number; y: number; z: number };
+    rotation: { x: number; y: number; z: number };
+    name: string;
+    health: number;
+    lives: number;
+    ammo: number;
+    ready: boolean;
+}
+
 class App {
+    private socket: Socket;
     private scene: THREE.Scene;
     private camera: THREE.PerspectiveCamera;
     private renderer: THREE.WebGLRenderer;
@@ -17,6 +30,7 @@ class App {
     private canvas: HTMLCanvasElement;
     private hero: THREE.Mesh;
     private heroBody: CANNON.Body;
+    private otherPlayers: Map<string, { mesh: THREE.Mesh; nameTag: THREE.Mesh }> = new Map();
     private ammoPickups: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
     private thunderBoosts: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
     private bullets: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
@@ -31,7 +45,14 @@ class App {
     private ammoCounter: HTMLElement;
     private speedBoostCounter: HTMLElement;
     private pauseMenu: HTMLElement;
+    private lobby: HTMLElement;
+    private lobbyTitle: HTMLElement;
     private resumeButton: HTMLElement;
+    private joinButton: HTMLElement;
+    private readyButton: HTMLElement;
+    private usernameInput: HTMLInputElement;
+    private lobbyStatus: HTMLElement;
+    private countdown: HTMLElement;
     private mouseX: number = 0;
     private mouseY: number = 0;
     private videoPlane: THREE.Mesh;
@@ -40,11 +61,17 @@ class App {
     private boostSpeed: number = 80;
     private boostDuration: number = 5000;
     private boostTimeout: NodeJS.Timeout | null = null;
+    private roomId: string | null = null;
+    private playerId: number | null = null;
+    private playerName: string | null = null;
+    private isReady: boolean = false;
 
     constructor() {
+        this.socket = io("http://localhost:3000");
+
         const getCanvas = (): HTMLCanvasElement => {
             const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
-            if (!canvas) throw new Error("Canvas element not found after DOM load");
+            if (!canvas) throw new Error("Canvas element not found");
             return canvas;
         };
 
@@ -53,7 +80,14 @@ class App {
             this.ammoCounter = document.getElementById("ammoCounter") as HTMLElement;
             this.speedBoostCounter = document.getElementById("speedBoostCounter") as HTMLElement;
             this.pauseMenu = document.getElementById("pauseMenu") as HTMLElement;
+            this.lobby = document.getElementById("lobby") as HTMLElement;
+            this.lobbyTitle = document.getElementById("lobbyTitle") as HTMLElement;
             this.resumeButton = document.getElementById("resumeButton") as HTMLElement;
+            this.joinButton = document.getElementById("joinButton") as HTMLElement;
+            this.readyButton = document.getElementById("readyButton") as HTMLElement;
+            this.usernameInput = document.getElementById("usernameInput") as HTMLInputElement;
+            this.lobbyStatus = document.getElementById("lobbyStatus") as HTMLElement;
+            this.countdown = document.getElementById("countdown") as HTMLElement;
 
             this.scene = new THREE.Scene();
             this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
@@ -63,10 +97,9 @@ class App {
             this.world = new CANNON.World();
             this.world.gravity.set(0, -9.81, 0);
 
-            this.createScene();
+            this.lobby.style.display = "block";
+            this.setupSocketEvents();
             this.setupInput();
-
-            this.animate();
         };
 
         if (document.readyState === "complete" || document.readyState === "interactive") {
@@ -74,6 +107,94 @@ class App {
         } else {
             window.addEventListener("DOMContentLoaded", initialize);
         }
+    }
+
+    private setupSocketEvents(): void {
+        this.joinButton.addEventListener("click", () => {
+            const username = this.usernameInput.value.trim();
+            if (username) {
+                this.playerName = username;
+                this.socket.emit("login", { name: username });
+                this.joinButton.style.display = "none";
+                this.usernameInput.style.display = "none";
+                this.readyButton.style.display = "block";
+                this.lobbyTitle.textContent = "Waiting for Players";
+            }
+        });
+
+        this.readyButton.addEventListener("click", () => {
+            if (!this.isReady) {
+                this.socket.emit("playerReady");
+                this.isReady = true;
+                this.readyButton.textContent = "Ready (Waiting)";
+                this.readyButton.disabled = true;
+            }
+        });
+
+        this.socket.on("loginSuccess", (data: { roomId: string; playerId: number; name: string }) => {
+            this.roomId = data.roomId;
+            this.playerId = data.playerId;
+            this.playerName = data.name;
+            this.createScene().then(() => {
+                this.animate();
+            });
+        });
+
+        this.socket.on("playersUpdate", (players: { [socketId: string]: PlayerData }) => {
+            Object.entries(players).forEach(([socketId, player]) => {
+                if (socketId !== this.socket.id) {
+                    this.updateOtherPlayer(socketId, player);
+                }
+            });
+            const totalPlayers = Object.keys(players).length;
+            this.lobbyStatus.textContent = `Players in lobby: ${totalPlayers}`;
+        });
+
+        this.socket.on("lobbyUpdate", ({ total, ready }: { total: number; ready: number }) => {
+            this.lobbyStatus.textContent = `Players: ${total} (Ready: ${ready}/${total})`;
+        });
+
+        this.socket.on("countdown", ({ timeLeft }: { timeLeft: number }) => {
+            this.countdown.textContent = timeLeft > 0 ? `Starting in ${timeLeft}...` : "Game Starting!";
+        });
+
+        this.socket.on("gameStarted", () => {
+            this.lobby.style.display = "none";
+            this.canvas.requestPointerLock();
+        });
+
+        this.socket.on("playerMoved", (data: { socketId: string; position: any; rotation: any }) => {
+            this.updateOtherPlayer(data.socketId, {
+                socketId: data.socketId,
+                position: data.position,
+                rotation: data.rotation,
+                name: "",
+                health: 100,
+                lives: 5,
+                ammo: 50,
+                ready: false,
+            });
+        });
+
+        this.socket.on("playerShot", (data: { socketId: string; origin: any; direction: any }) => {
+            this.spawnBullet(data.origin, data.direction);
+        });
+
+        this.socket.on("playerHitEffect", (data: { targetSocketId: string }) => {
+            // Add visual feedback for hits if desired
+        });
+
+        this.socket.on("playerOut", () => {
+            this.isPaused = true;
+            this.pauseMenu.style.display = "block";
+            alert("You are out of lives!");
+        });
+
+        this.socket.on("gameEnded", ({ winnerSocketId }: { winnerSocketId: string }) => {
+            this.isPaused = true;
+            this.pauseMenu.style.display = "block";
+            alert(`Game Over! Winner: ${this.otherPlayers.get(winnerSocketId)?.nameTag.userData.name || "Unknown"}`);
+        });
     }
 
     private async createScene(): Promise<void> {
@@ -334,7 +455,7 @@ class App {
 
         // Ammo Pickups
         const ammoMaterial = new THREE.MeshStandardMaterial({ color: 0xffff00 });
-        for (let i = 0; i < 80; i++) { // Adjust this number to control ammo pickup count
+        for (let i = 0; i < 80; i++) {
             const ammoBox = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), ammoMaterial);
             const x = Math.round((Math.random() * 900 - 450) / 90) * 90 + (streetWidth / 2 + sidewalkWidth / 2);
             const z = Math.round((Math.random() * 900 - 450) / 90) * 90 + (streetWidth / 2 + sidewalkWidth / 2);
@@ -347,14 +468,14 @@ class App {
             this.ammoPickups.push({ mesh: ammoBox, body: ammoBody });
         }
 
-        // Multiple Thunder Speed Boosts
+        // Thunder Speed Boosts
         const thunderGeometry = new THREE.ConeGeometry(0.5, 2, 8);
         const thunderMaterial = new THREE.MeshStandardMaterial({ 
             color: 0x00ffff,
             emissive: 0x00ffff,
             emissiveIntensity: 0.5 
         });
-        for (let i = 0; i < 40; i++) { // Adjust this number to control thunder boost count
+        for (let i = 0; i < 40; i++) {
             const thunder = new THREE.Mesh(thunderGeometry, thunderMaterial);
             const x = Math.round((Math.random() * 900 - 450) / 90) * 90 + (streetWidth / 2 + sidewalkWidth / 2);
             const z = Math.round((Math.random() * 900 - 450) / 90) * 90 + (streetWidth / 2 + sidewalkWidth / 2);
@@ -390,9 +511,55 @@ class App {
         this.camera.position.set(0, 2, -25);
     }
 
+    private updateOtherPlayer(socketId: string, player: PlayerData): void {
+        if (!this.otherPlayers.has(socketId)) {
+            const geometry = new THREE.BoxGeometry(2, 2, 2);
+            const material = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+            const mesh = new THREE.Mesh(geometry, material);
+            this.scene.add(mesh);
+
+            const textGeometry = new THREE.PlaneGeometry(2, 0.5);
+            const textMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true });
+            const nameTag = new THREE.Mesh(textGeometry, textMaterial);
+            nameTag.position.y = 2.5;
+            nameTag.userData = { name: player.name };
+            mesh.add(nameTag);
+
+            this.otherPlayers.set(socketId, { mesh, nameTag });
+        }
+
+        const playerObj = this.otherPlayers.get(socketId)!;
+        playerObj.mesh.position.set(player.position.x, player.position.y, player.position.z);
+        playerObj.mesh.rotation.set(player.rotation.x, player.rotation.y, player.rotation.z);
+    }
+
+    private spawnBullet(origin: any, direction: any): void {
+        const bulletGeometry = new THREE.SphereGeometry(0.3, 16, 16);
+        const bulletMaterial = new THREE.MeshStandardMaterial({ color: 0xffff00, emissive: 0xffff00 });
+        const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
+        bullet.position.set(origin.x, origin.y, origin.z);
+        this.scene.add(bullet);
+
+        const bulletBody = new CANNON.Body({ mass: 1 });
+        bulletBody.addShape(new CANNON.Sphere(0.1));
+        bulletBody.position.set(origin.x, origin.y, origin.z);
+        bulletBody.velocity.set(direction.x * 100, direction.y * 100, direction.z * 100);
+        this.world.addBody(bulletBody);
+        this.bullets.push({ mesh: bullet, body: bulletBody });
+
+        setTimeout(() => {
+            const index = this.bullets.findIndex((b) => b.mesh === bullet);
+            if (index !== -1) {
+                this.scene.remove(this.bullets[index].mesh);
+                this.world.removeBody(this.bullets[index].body);
+                this.bullets.splice(index, 1);
+            }
+        }, 2000);
+    }
+
     private setupInput(): void {
         this.canvas.addEventListener("click", () => {
-            if (!this.isPaused) this.canvas.requestPointerLock();
+            if (!this.isPaused && this.lobby.style.display === "none") this.canvas.requestPointerLock();
         });
 
         document.addEventListener("keydown", (event) => {
@@ -439,45 +606,24 @@ class App {
         });
 
         this.canvas.addEventListener("mousedown", () => {
-            if (this.isPaused || !document.pointerLockElement) return;
-            if (this.ammo > 0) {
-                this.ammo--;
-                this.ammoCounter.textContent = `Ammo: ${this.ammo}`;
-    
-                const bulletGeometry = new THREE.SphereGeometry(0.3, 16, 16);
-                const bulletMaterial = new THREE.MeshStandardMaterial({
-                    color: 0xffffff,
-                    emissive: 0xffff00,
-                    emissiveIntensity: 1
-                });
-                const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
-                bullet.position.copy(this.camera.position);
-                this.scene.add(bullet);
-  
-                const bulletBody = new CANNON.Body({ mass: 1 });
-                bulletBody.addShape(new CANNON.Sphere(0.1));
-                bulletBody.position.copy(this.camera.position);
-                const direction = this.camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(100);
-                bulletBody.velocity.set(direction.x, direction.y, direction.z);
-                this.world.addBody(bulletBody);
-                this.bullets.push({ mesh: bullet, body: bulletBody });
-    
-                setTimeout(() => {
-                    const index = this.bullets.findIndex(b => b.mesh === bullet);
-                    if (index !== -1) {
-                        this.scene.remove(this.bullets[index].mesh);
-                        this.world.removeBody(this.bullets[index].body);
-                        this.bullets.splice(index, 1);
-                    }
-                }, 2000);
-            }
+            if (this.isPaused || !document.pointerLockElement || this.ammo <= 0) return;
+            this.ammo--;
+            this.ammoCounter.textContent = `Ammo: ${this.ammo}`;
+
+            const direction = this.camera.getWorldDirection(new THREE.Vector3());
+            this.socket.emit("playerShot", {
+                origin: this.camera.position,
+                direction: direction,
+            });
+
+            this.spawnBullet(this.camera.position, direction);
         });
     }
 
     private animate(): void {
         requestAnimationFrame(() => this.animate());
 
-        if (!this.isPaused) {
+        if (!this.isPaused && this.roomId) {
             this.world.step(1 / 60);
 
             this.hero.position.copy(this.heroBody.position);
@@ -505,12 +651,16 @@ class App {
             }
             this.heroBody.velocity.set(forward.x * fSpeed + right.x * sSpeed, velocity.y, forward.z * fSpeed + right.z * sSpeed);
 
-            const cameraPosition = this.hero.position.clone().add(new THREE.Vector3(0, 1, 0));
-            this.camera.position.copy(cameraPosition);
+            this.camera.position.copy(this.hero.position).add(new THREE.Vector3(0, 1, 0));
             this.camera.rotation.order = "YXZ";
             this.camera.rotation.set(this.mouseY, this.mouseX, 0);
 
-            this.bullets.forEach(bullet => {
+            this.socket.emit("updatePosition", {
+                position: this.hero.position,
+                rotation: { x: this.camera.rotation.x, y: this.camera.rotation.y, z: this.camera.rotation.z },
+            });
+
+            this.bullets.forEach((bullet) => {
                 bullet.mesh.position.copy(bullet.body.position);
                 bullet.mesh.quaternion.copy(bullet.body.quaternion);
             });
@@ -518,8 +668,8 @@ class App {
             // Ammo pickup with increased proximity
             this.ammoPickups.forEach((pickup, index) => {
                 const distance = this.hero.position.distanceTo(pickup.mesh.position);
-                if (distance < 3) { // Increased from 1.5 to 3
-                    this.ammo += 10; // Adds 10 ammo to the count
+                if (distance < 3) {
+                    this.ammo += 10;
                     this.ammoCounter.textContent = `Ammo: ${this.ammo}`;
                     this.scene.remove(pickup.mesh);
                     this.world.removeBody(pickup.body);
@@ -530,7 +680,7 @@ class App {
             // Thunder boost pickup with increased proximity
             this.thunderBoosts.forEach((boost, index) => {
                 const distance = this.hero.position.distanceTo(boost.mesh.position);
-                if (distance < 3) { // Increased from 1.5 to 3
+                if (distance < 3) {
                     this.scene.remove(boost.mesh);
                     this.world.removeBody(boost.body);
                     this.thunderBoosts.splice(index, 1);
