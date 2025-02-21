@@ -51,6 +51,8 @@ class App {
     private heroBody!: CANNON.Body;
     private otherPlayers: Map<string, { mesh: THREE.Object3D; nameTag: THREE.Mesh; healthBar: THREE.Group; ammoBar: THREE.Mesh }> = new Map();
     private bots: Map<string, Bot> = new Map();
+    private isLoadingBots: boolean = false;
+    private levelCounter!: HTMLElement;
     private ammoPickups: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
     private thunderBoosts: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
     private bullets: { mesh: THREE.Mesh; body: CANNON.Body; owner: string }[] = [];
@@ -124,6 +126,8 @@ class App {
         this.miniMapCamera = new THREE.OrthographicCamera(-400, 400, 400, -400, 1, 1000);
         this.miniMapCamera.position.set(0, 200, 0);
         this.miniMapCamera.lookAt(0, 0, 0);
+        this.levelCounter = document.getElementById("levelCounter") as HTMLElement;
+        this.levelCounter.textContent = `Level: ${this.level}`;
     }
 
     private initialize(): void {
@@ -132,17 +136,19 @@ class App {
             if (!canvas) throw new Error("Canvas element not found");
             return canvas;
         };
-
+    
         const init = () => {
             this.canvas = getCanvas();
             this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas });
             this.renderer.setSize(window.innerWidth, window.innerHeight);
             this.world.gravity.set(0, -9.81, 0);
-
+    
+            // Assign HUD elements with null checks
             this.ammoCounter = document.getElementById("ammoCounter") as HTMLElement;
             this.speedBoostCounter = document.getElementById("speedBoostCounter") as HTMLElement;
             this.livesCounter = document.getElementById("livesCounter") as HTMLElement;
             this.healthCounter = document.getElementById("healthCounter") as HTMLElement;
+            this.levelCounter = document.getElementById("levelCounter") as HTMLElement;
             this.ammoWarning = document.getElementById("ammoWarning") as HTMLElement;
             this.pauseMenu = document.getElementById("pauseMenu") as HTMLElement;
             this.lobby = document.getElementById("lobby") as HTMLElement;
@@ -158,7 +164,16 @@ class App {
             this.characterPreview = document.getElementById("characterPreview") as HTMLElement;
             this.characterOptions = document.getElementById("characterOptions") as HTMLElement;
             this.difficultySelection = document.getElementById("difficultySelection") as HTMLElement;
-
+    
+            // Verify levelCounter exists
+            if (!this.levelCounter) {
+                console.error("Level counter element not found in DOM!");
+                this.levelCounter = document.createElement("div"); // Fallback
+                this.levelCounter.id = "levelCounter";
+                document.getElementById("hud")?.appendChild(this.levelCounter);
+            }
+            this.levelCounter.textContent = `Level: ${this.level}`;
+    
             this.lobby.style.display = "block";
             this.setupSocketEvents();
             this.setupInput();
@@ -166,7 +181,7 @@ class App {
             this.handleResize();
             window.addEventListener('resize', () => this.handleResize());
         };
-
+    
         if (document.readyState === "complete" || document.readyState === "interactive") {
             init();
         } else {
@@ -209,14 +224,13 @@ class App {
                     Math.random = () => rng();
                     this.characterSelection.style.display = "none";
                     this.difficultySelection.style.display = "none";
-                    this.lobbyTitle.textContent = "Starting Single Player - Level 1";
+                    this.lobbyTitle.textContent = `Starting Single Player - Level ${this.level}`;
                     this.readyButton.style.display = "none";
                     this.isReady = true;
-                    this.isPaused = true; // Pause until bots load
-                    this.createScene({ x: 0, y: 100, z: 0 }).then(() => {
+                    this.isPaused = true; // Pause until scene loads
+                    this.createScene({ x: 0, y: 2.68, z: 0 }).then(() => { // Start on ground
                         this.createBots();
                         this.lobby.style.display = "none";
-                        // Do not unpause here; wait for bots to load in createBots
                         this.animate();
                     });
                 } else {
@@ -321,6 +335,9 @@ class App {
     }
 
     private createBots(): void {
+        if (this.isLoadingBots) return; // Prevent re-entry while loading
+        this.isLoadingBots = true;
+    
         const gltfLoader = new GLTFLoader();
         const botCount = this.level; // 1 at Level 1, 2 at Level 2, etc.
         console.log(`Creating ${botCount} bots for Level ${this.level}`);
@@ -405,7 +422,8 @@ class App {
                 botsLoaded++;
                 if (botsLoaded === botCount) {
                     console.log(`All ${botCount} bots loaded for Level ${this.level}`);
-                    this.isPaused = false; // Resume game only after all bots are loaded
+                    this.isPaused = false; // Resume game
+                    this.isLoadingBots = false; // Allow next level progression
                 }
             });
         }
@@ -435,15 +453,16 @@ class App {
 
     private updateBotBehavior(): void {
         this.bots.forEach((bot) => {
+            // Existing bot AI logic remains unchanged
             const directionToPlayer = this.hero.position.clone().sub(bot.mesh.position).normalize();
             const distanceToPlayer = bot.mesh.position.distanceTo(this.hero.position);
             const pursuitSpeed = this.normalSpeed;
-
+    
             bot.fleeTimer += 16.67;
             const fleeDuration = 3000;
             const pursueDuration = 5000;
             const cycleTime = fleeDuration + pursueDuration;
-
+    
             if (bot.ammo === 0 || (bot.fleeTimer % cycleTime < fleeDuration && distanceToPlayer < 50)) {
                 const fleeDirection = bot.ammo === 0 && this.ammoPickups.length > 0
                     ? this.ammoPickups.reduce((closest, pickup) => {
@@ -465,7 +484,7 @@ class App {
             } else {
                 bot.body.velocity.set(0, bot.body.velocity.y, 0);
             }
-
+    
             const shootInterval = bot.difficulty === 'easy' ? 3000 : bot.difficulty === 'medium' ? 2000 : 1000;
             bot.shootTimer += 16.67;
             if (bot.shootTimer > shootInterval && distanceToPlayer < 100 && bot.ammo > 0 && distanceToPlayer > 10) {
@@ -481,18 +500,19 @@ class App {
                 bot.shootTimer = Math.random() * 1000;
                 this.updateIndicators(bot.mesh, bot.health, bot.lives, bot.ammo);
             }
-
+    
             bot.mesh.position.copy(bot.body.position);
             bot.mesh.rotation.y = Math.atan2(directionToPlayer.x, directionToPlayer.z);
         });
-
-        if (this.isSinglePlayer && this.bots.size === 0) {
+    
+        if (this.isSinglePlayer && this.bots.size === 0 && !this.isLoadingBots) {
             this.level++;
+            this.levelCounter.textContent = `Level: ${this.level}`; // Update UI
             this.lobbyTitle.textContent = `Starting Single Player - Level ${this.level}`;
-            this.createBots();
+            this.isPaused = true; // Pause until bots load
+            this.createBots(); // Just spawn new bots, don’t recreate scene
         }
     }
-
     private updateIndicators(character: THREE.Object3D, health: number, lives: number, ammo: number): void {
         const healthBar = character.children.find(child => child instanceof THREE.Group && child.children.length === 5) as THREE.Group;
         if (healthBar) {
