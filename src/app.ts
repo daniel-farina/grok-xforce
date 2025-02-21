@@ -335,14 +335,13 @@ class App {
     }
 
     private createBots(): void {
-        if (this.isLoadingBots) return; // Prevent re-entry while loading
+        if (this.isLoadingBots) return;
         this.isLoadingBots = true;
     
         const gltfLoader = new GLTFLoader();
-        const botCount = this.level; // 1 at Level 1, 2 at Level 2, etc.
+        const botCount = this.level;
         console.log(`Creating ${botCount} bots for Level ${this.level}`);
     
-        // Clear existing bots
         this.bots.forEach((bot) => {
             this.scene.remove(bot.mesh);
             this.world.removeBody(bot.body);
@@ -361,6 +360,12 @@ class App {
                 attempts++;
             } while (!this.isPositionClear(new THREE.Vector3(x, 0, z), 10) && attempts < 100);
     
+            if (attempts >= 100) {
+                console.warn(`Could not find clear position for bot ${botId}`);
+                x = (Math.random() - 0.5) * 800; // Fallback position
+                z = (Math.random() - 0.5) * 800;
+            }
+    
             const difficulty = ['easy', 'medium', 'hard'][Math.floor(Math.random() * 3)] as 'easy' | 'medium' | 'hard';
     
             gltfLoader.load('/assets/characters/character-male-a.glb', (gltf) => {
@@ -368,6 +373,7 @@ class App {
                 mesh.scale.set(2.68, 2.68, 2.68);
                 mesh.position.set(x, 0, z);
                 this.scene.add(mesh);
+                console.log(`Bot ${botId} mesh added at position: ${x}, 0, ${z}`);
     
                 const body = new CANNON.Body({ mass: 1 });
                 body.addShape(new CANNON.Box(new CANNON.Vec3(0.5 * 2.68, 1 * 2.68, 0.5 * 2.68)));
@@ -418,12 +424,11 @@ class App {
     
                 this.updateIndicators(mesh, 100, 5, 50);
     
-                // Track loading completion
                 botsLoaded++;
                 if (botsLoaded === botCount) {
                     console.log(`All ${botCount} bots loaded for Level ${this.level}`);
-                    this.isPaused = false; // Resume game
-                    this.isLoadingBots = false; // Allow next level progression
+                    this.isPaused = false;
+                    this.isLoadingBots = false;
                 }
             });
         }
@@ -442,7 +447,7 @@ class App {
             if (pos.distanceTo(boost.mesh.position) < minDistance) return false;
         }
         for (const bot of this.bots.values()) {
-            if (pos.distanceTo(bot.mesh.position) < minDistance) return false;
+            if (pos.distanceTo(bot.mesh.position) < minDistance * 2) return false; // Increased spacing between bots
         }
         for (const player of this.otherPlayers.values()) {
             if (pos.distanceTo(player.mesh.position) < minDistance) return false;
@@ -450,7 +455,6 @@ class App {
         if (this.hero && pos.distanceTo(this.hero.position) < minDistance) return false;
         return true;
     }
-
     private updateBotBehavior(): void {
         this.bots.forEach((bot) => {
             // Existing bot AI logic remains unchanged
@@ -1269,6 +1273,7 @@ class App {
                 }
     
                 if (this.isSinglePlayer) {
+                    console.log(`Updating ${this.bots.size} bots`);
                     this.bots.forEach((bot) => {
                         if (bullet.owner !== bot.id) {
                             const distance = bullet.mesh.position.distanceTo(bot.mesh.position);
