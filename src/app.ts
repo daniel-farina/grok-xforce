@@ -141,7 +141,7 @@ class App {
             this.canvas = getCanvas();
             this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas });
             this.renderer.setSize(window.innerWidth, window.innerHeight);
-            this.world.gravity.set(0, -9.81, 0);
+            this.world.gravity.set(0, -20, 0);
     
             // Assign HUD elements with null checks
             this.ammoCounter = document.getElementById("ammoCounter") as HTMLElement;
@@ -435,6 +435,13 @@ class App {
     }
 
     private isPositionClear(pos: THREE.Vector3, minDistance: number): boolean {
+      // Check elevator area (30x30 square centered at 0,0)
+        const elevatorHalfSize = 15; // Half of 30
+        if (Math.abs(pos.x) < elevatorHalfSize + minDistance && 
+            Math.abs(pos.z) < elevatorHalfSize + minDistance) {
+            return false;
+        }
+       
         for (const building of this.buildings) {
             const distance = pos.distanceTo(building.mesh.position);
             const buildingSize = new THREE.Box3().setFromObject(building.mesh).getSize(new THREE.Vector3());
@@ -745,16 +752,16 @@ class App {
         const heroGltf = await gltfLoader.loadAsync(`/assets/characters/${this.selectedCharacter}`);
         this.hero = heroGltf.scene;
         this.hero.scale.set(2.68, 2.68, 2.68);
-        this.hero.position.set(initialPosition?.x || 0, initialPosition?.y || 100, initialPosition?.z || 0);
+        this.hero.position.set(initialPosition?.x || 0, initialPosition?.y || 2.68, initialPosition?.z || 0);
         this.scene.add(this.hero);
-
+    
         const textGeometry = new THREE.PlaneGeometry(2, 0.5);
         const textMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true });
         const nameTag = new THREE.Mesh(textGeometry, textMaterial);
         nameTag.position.y = 3;
         nameTag.userData = { name: this.playerName || "Player" };
         this.hero.add(nameTag);
-
+    
         const healthBar = new THREE.Group();
         for (let i = 0; i < 5; i++) {
             const dotGeometry = new THREE.CircleGeometry(0.2, 16);
@@ -764,103 +771,91 @@ class App {
             healthBar.add(dot);
         }
         this.hero.add(healthBar);
-
+    
         const ammoBarGeometry = new THREE.PlaneGeometry(2, 0.2);
         const ammoBarMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff });
         const ammoBar = new THREE.Mesh(ammoBarGeometry, ammoBarMaterial);
         ammoBar.position.y = 2.73;
         this.hero.add(ammoBar);
-
-        const ammoPickupMaterial = new THREE.MeshStandardMaterial({ color: 0xffff00 });
-
-        this.heroBody = new CANNON.Body({ mass: 1 });
-        this.heroBody.addShape(new CANNON.Box(new CANNON.Vec3(0.5 * 2.68, 1 * 2.68, 0.5 * 2.68)));
-        this.heroBody.position.set(initialPosition?.x || 0, initialPosition?.y || 100, initialPosition?.z || 0);
+    
+        // Hero physics with cylinder shape and material
+        const heroMaterial = new CANNON.Material({ friction: 1.0, restitution: 0 }); // Increased friction
+        this.heroBody = new CANNON.Body({ mass: 1, material: heroMaterial });
+        this.heroBody.addShape(new CANNON.Cylinder(0.5 * 2.68, 0.5 * 2.68, 2 * 2.68, 16));
+        this.heroBody.position.set(initialPosition?.x || 0, initialPosition?.y || 2.68, initialPosition?.z || 0);
+        this.heroBody.linearDamping = 0; // Removed damping for full gravity effect
         this.world.addBody(this.heroBody);
         this.heroReady = true;
         while (this.pendingPlayersUpdates.length > 0) {
             this.processPlayersUpdate(this.pendingPlayersUpdates.shift()!);
         }
-
+    
         const textureLoader = new THREE.TextureLoader();
         const groundTexture = textureLoader.load('/assets/textures/ground.jpg');
         groundTexture.wrapS = groundTexture.wrapT = THREE.RepeatWrapping;
         groundTexture.repeat.set(40, 40);
-        const groundMaterial = new THREE.MeshStandardMaterial({ map: groundTexture });
+        const groundVisualMaterial = new THREE.MeshStandardMaterial({ map: groundTexture });
         const groundGeometry = new THREE.PlaneGeometry(800, 800);
-        const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+        const ground = new THREE.Mesh(groundGeometry, groundVisualMaterial);
         ground.rotation.x = -Math.PI / 2;
         ground.position.y = -1;
         this.scene.add(ground);
-        const groundBody = new CANNON.Body({ mass: 0 });
+    
+        // Ground physics with material
+        const groundPhysicsMaterial = new CANNON.Material({ friction: 0.5, restitution: 0 });
+        const groundBody = new CANNON.Body({ mass: 0, material: groundPhysicsMaterial });
         groundBody.addShape(new CANNON.Plane());
         groundBody.position.set(0, -1, 0);
         groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
         this.world.addBody(groundBody);
-
+    
         const streetWidth = 10;
         const sidewalkWidth = 3;
         const streetSpacing = 50;
         const streetMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
         const sidewalkMaterial = new THREE.MeshStandardMaterial({ color: 0x888888 });
-
+    
         for (let x = -400; x <= 400; x += streetSpacing) {
-            const streetX = new THREE.Mesh(
-                new THREE.PlaneGeometry(800, streetWidth),
-                streetMaterial
-            );
+            const streetX = new THREE.Mesh(new THREE.PlaneGeometry(800, streetWidth), streetMaterial);
             streetX.rotation.x = -Math.PI / 2;
             streetX.position.set(x, -0.95, 0);
             this.scene.add(streetX);
-
-            const sidewalkX1 = new THREE.Mesh(
-                new THREE.PlaneGeometry(800, sidewalkWidth),
-                sidewalkMaterial
-            );
+    
+            const sidewalkX1 = new THREE.Mesh(new THREE.PlaneGeometry(800, sidewalkWidth), sidewalkMaterial);
             sidewalkX1.rotation.x = -Math.PI / 2;
             sidewalkX1.position.set(x - streetWidth / 2 - sidewalkWidth / 2, -0.9, 0);
             this.scene.add(sidewalkX1);
-
-            const sidewalkX2 = new THREE.Mesh(
-                new THREE.PlaneGeometry(800, sidewalkWidth),
-                sidewalkMaterial
-            );
+    
+            const sidewalkX2 = new THREE.Mesh(new THREE.PlaneGeometry(800, sidewalkWidth), sidewalkMaterial);
             sidewalkX2.rotation.x = -Math.PI / 2;
             sidewalkX2.position.set(x + streetWidth / 2 + sidewalkWidth / 2, -0.9, 0);
             this.scene.add(sidewalkX2);
         }
-
+    
         for (let z = -400; z <= 400; z += streetSpacing) {
-            const streetZ = new THREE.Mesh(
-                new THREE.PlaneGeometry(streetWidth, 800),
-                streetMaterial
-            );
+            const streetZ = new THREE.Mesh(new THREE.PlaneGeometry(streetWidth, 800), streetMaterial);
             streetZ.rotation.x = -Math.PI / 2;
             streetZ.position.set(0, -0.95, z);
             this.scene.add(streetZ);
-
-            const sidewalkZ1 = new THREE.Mesh(
-                new THREE.PlaneGeometry(streetWidth, 800),
-                sidewalkMaterial
-            );
+    
+            const sidewalkZ1 = new THREE.Mesh(new THREE.PlaneGeometry(streetWidth, 800), sidewalkMaterial);
             sidewalkZ1.rotation.x = -Math.PI / 2;
             sidewalkZ1.position.set(0, -0.9, z - streetWidth / 2 - sidewalkWidth / 2);
             this.scene.add(sidewalkZ1);
-
-            const sidewalkZ2 = new THREE.Mesh(
-                new THREE.PlaneGeometry(streetWidth, 800),
-                sidewalkMaterial
-            );
+    
+            const sidewalkZ2 = new THREE.Mesh(new THREE.PlaneGeometry(streetWidth, 800), sidewalkMaterial);
             sidewalkZ2.rotation.x = -Math.PI / 2;
             sidewalkZ2.position.set(0, -0.9, z + streetWidth / 2 + sidewalkWidth / 2);
             this.scene.add(sidewalkZ2);
         }
-
+    
         const skyscrapers = ["skyscraperA.glb", "skyscraperB.glb", "skyscraperC.glb"];
         const largeBuildings = ["large_buildingA.glb", "large_buildingB.glb", "large_buildingC.glb"];
         const lowBuildings = ["low_buildingA.glb", "low_buildingB.glb", "low_buildingC.glb"];
         const cars = ["sedan.glb", "suv.glb", "taxi.glb"];
-
+    
+        const staticMaterial = new CANNON.Material({ friction: 0.5, restitution: 0 });
+    
         const loadModel = (path: string, position: THREE.Vector3, scale: number, rotationY = 0): Promise<THREE.Object3D> => {
             return new Promise((resolve) => {
                 gltfLoader.load(path, (gltf) => {
@@ -870,22 +865,22 @@ class App {
                     model.position.copy(position);
                     model.position.y = -1;
                     this.scene.add(model);
-
+    
                     const bbox = new THREE.Box3().setFromObject(model);
                     const size = new THREE.Vector3();
                     bbox.getSize(size);
-                    const body = new CANNON.Body({ mass: 0 });
+                    const body = new CANNON.Body({ mass: 0, material: staticMaterial });
                     body.addShape(new CANNON.Box(new CANNON.Vec3(size.x / 2, size.y / 2, size.z / 2)));
                     body.position.copy(model.position);
                     body.quaternion.copy(model.quaternion);
                     this.world.addBody(body);
                     this.buildings.push({ mesh: model, body });
-
+    
                     resolve(model);
                 });
             });
         };
-
+    
         for (let x = -400; x <= 400; x += streetSpacing) {
             for (let z = -400; z <= 400; z += streetSpacing) {
                 if (Math.abs(x) < streetWidth / 2 || Math.abs(z) < streetWidth / 2) continue;
@@ -899,7 +894,7 @@ class App {
                     spawnZ = z + (Math.random() - 0.5) * streetSpacing;
                     attempts++;
                 } while (!this.isPositionClear(new THREE.Vector3(spawnX, -1, spawnZ), 10) && attempts < 50);
-
+    
                 if (distance < 100 && this.isPositionClear(new THREE.Vector3(spawnX, -1, spawnZ), 10)) {
                     buildingType = skyscrapers;
                     scale = 30;
@@ -912,7 +907,7 @@ class App {
                 } else {
                     continue;
                 }
-
+    
                 const offset = streetWidth / 2 + sidewalkWidth + 5;
                 const positions = [
                     new THREE.Vector3(spawnX + offset, -1, spawnZ),
@@ -920,7 +915,7 @@ class App {
                     new THREE.Vector3(spawnX, -1, spawnZ + offset),
                     new THREE.Vector3(spawnX, -1, spawnZ - offset)
                 ];
-
+    
                 for (const pos of positions) {
                     if (this.isPositionClear(pos, 10)) {
                         await loadModel(
@@ -933,7 +928,7 @@ class App {
                 }
             }
         }
-
+    
         for (let i = 0; i < 20; i++) {
             const carModel = cars[Math.floor(Math.random() * cars.length)];
             const isXStreet = Math.random() > 0.5;
@@ -951,7 +946,7 @@ class App {
                 }
                 attempts++;
             } while (!this.isPositionClear(new THREE.Vector3(x, 0, z), 10) && attempts < 50);
-
+    
             if (Math.abs(x) > streetWidth / 2 && Math.abs(z) > streetWidth / 2) {
                 await loadModel(
                     `/assets/cars/${carModel}`,
@@ -965,12 +960,12 @@ class App {
                 });
             }
         }
-
+    
         const skyGeometry = new THREE.SphereGeometry(1000, 32, 32);
         const skyMaterial = new THREE.MeshBasicMaterial({ color: 0x001133, side: THREE.BackSide });
         const sky = new THREE.Mesh(skyGeometry, skyMaterial);
         this.scene.add(sky);
-
+    
         const starGeometry = new THREE.BufferGeometry();
         const starCount = 2000;
         const positions = new Float32Array(starCount * 3);
@@ -983,7 +978,7 @@ class App {
         const starMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 1, sizeAttenuation: true });
         const stars = new THREE.Points(starGeometry, starMaterial);
         this.scene.add(stars);
-
+    
         const ambientLight = new THREE.AmbientLight(0x404060, 2.0);
         this.scene.add(ambientLight);
         const light1 = new THREE.DirectionalLight(0x8080ff, 1.0);
@@ -993,19 +988,21 @@ class App {
         const light2 = new THREE.DirectionalLight(0x8080ff, 0.5);
         light2.position.set(-100, 100, -100);
         this.scene.add(light2);
-
+    
+        // Create elevator at center (0,0) instead of (100,100)
         const elevatorGeometry = new THREE.BoxGeometry(30, 1, 30);
         const elevatorMaterial = new THREE.MeshStandardMaterial({ color: 0x666666 });
         const elevatorMesh = new THREE.Mesh(elevatorGeometry, elevatorMaterial);
-        elevatorMesh.position.set(100, -0.25, 100);
+        elevatorMesh.position.set(0, -0.25, 0);  // Center of city
         this.scene.add(elevatorMesh);
 
-        const elevatorBody = new CANNON.Body({ mass: 0 });
+        const elevatorBody = new CANNON.Body({ mass: 0, material: staticMaterial });
         elevatorBody.addShape(new CANNON.Box(new CANNON.Vec3(15, 0.5, 15)));
-        elevatorBody.position.set(100, -0.25, 100);
+        elevatorBody.position.set(0, -0.25, 0);  // Center of city
         this.world.addBody(elevatorBody);
         this.elevator = { mesh: elevatorMesh, body: elevatorBody };
-
+    
+        const ammoPickupMaterial = new THREE.MeshStandardMaterial({ color: 0xffff00 });
         for (let i = 0; i < 80; i++) {
             let x, z;
             let attempts = 0;
@@ -1014,19 +1011,19 @@ class App {
                 z = Math.round((Math.random() * 800 - 400) / streetSpacing) * streetSpacing + (streetWidth / 2 + sidewalkWidth / 2);
                 attempts++;
             } while (!this.isPositionClear(new THREE.Vector3(x, 0.5, z), 10) && attempts < 50);
-
+    
             if (Math.abs(x) > streetWidth && Math.abs(z) > streetWidth) {
                 const ammoBox = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), ammoPickupMaterial);
                 ammoBox.position.set(x, 0.5, z);
                 this.scene.add(ammoBox);
-                const ammoBody = new CANNON.Body({ mass: 0 });
+                const ammoBody = new CANNON.Body({ mass: 0, material: staticMaterial });
                 ammoBody.addShape(new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5)));
                 ammoBody.position.copy(ammoBox.position);
                 this.world.addBody(ammoBody);
                 this.ammoPickups.push({ mesh: ammoBox, body: ammoBody });
             }
         }
-
+    
         const thunderGeometry = new THREE.ConeGeometry(0.5, 2, 8);
         const thunderMaterial = new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x00ffff, emissiveIntensity: 0.5 });
         for (let i = 0; i < 40; i++) {
@@ -1037,20 +1034,20 @@ class App {
                 z = Math.round((Math.random() * 800 - 400) / streetSpacing) * streetSpacing + (streetWidth / 2 + sidewalkWidth / 2);
                 attempts++;
             } while (!this.isPositionClear(new THREE.Vector3(x, 1, z), 10) && attempts < 50);
-
+    
             if (Math.abs(x) > streetWidth && Math.abs(z) > streetWidth) {
                 const thunder = new THREE.Mesh(thunderGeometry, thunderMaterial);
                 thunder.position.set(x, 1, z);
                 this.scene.add(thunder);
-
-                const thunderBody = new CANNON.Body({ mass: 0 });
+    
+                const thunderBody = new CANNON.Body({ mass: 0, material: staticMaterial });
                 thunderBody.addShape(new CANNON.Cylinder(0.5, 0.5, 2, 8));
                 thunderBody.position.copy(thunder.position);
                 this.world.addBody(thunderBody);
                 this.thunderBoosts.push({ mesh: thunder, body: thunderBody });
             }
         }
-
+    
         const treeMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22 });
         for (let i = 0; i < 100; i++) {
             let x, z;
@@ -1060,23 +1057,17 @@ class App {
                 z = Math.round((Math.random() * 800 - 400) / streetSpacing) * streetSpacing + (streetWidth / 2 + sidewalkWidth / 2);
                 attempts++;
             } while (!this.isPositionClear(new THREE.Vector3(x, 1, z), 10) && attempts < 50);
-
+    
             if (Math.abs(x) > streetWidth && Math.abs(z) > streetWidth) {
-                const trunk = new THREE.Mesh(
-                    new THREE.CylinderGeometry(0.3, 0.3, 3),
-                    treeMaterial
-                );
-                const foliage = new THREE.Mesh(
-                    new THREE.SphereGeometry(2, 12, 12),
-                    treeMaterial
-                );
+                const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 3), treeMaterial);
+                const foliage = new THREE.Mesh(new THREE.SphereGeometry(2, 12, 12), treeMaterial);
                 trunk.position.set(x, 1, z);
                 foliage.position.set(x, 2.5, z);
                 this.scene.add(trunk, foliage);
             }
         }
-
-        this.camera.position.set(0, 100, -15);
+    
+        this.camera.position.set(0, 2.68, -15); // Adjusted to match hero height
     }
 
     private updateOtherPlayer(socketId: string, player: PlayerData): void {
@@ -1140,12 +1131,11 @@ class App {
     
         if (!this.isPaused && (this.roomId || this.isSinglePlayer)) {
             this.world.step(1 / 60);
-    
             if (this.elevator) {
                 this.elevatorTimer += 16.67;
                 let targetY: number;
                 let progress: number;
-    
+            
                 switch (this.elevatorState) {
                     case "ground":
                         if (this.elevatorTimer >= this.elevatorWaitTime) {
@@ -1180,15 +1170,24 @@ class App {
                         }
                         break;
                 }
-    
-                const heroBox = new THREE.Box3().setFromObject(this.hero);
-                const elevatorBox = new THREE.Box3().setFromObject(this.elevator.mesh);
-                if (heroBox.intersectsBox(elevatorBox) && this.hero.position.y <= this.elevator.mesh.position.y + 0.5) {
-                    this.heroBody.position.y = this.elevator.body.position.y + 2.68;
-                    this.hero.position.y = this.elevator.mesh.position.y + 2.68;
+
+                // Modified to only lift hero if within elevator bounds
+                const elevatorHalfSize = 15; // Half of 30x30
+                const heroPos = this.heroBody.position;
+                const isOnElevator = Math.abs(heroPos.x) < elevatorHalfSize && 
+                                  Math.abs(heroPos.z) < elevatorHalfSize;
+                
+                if (isOnElevator) {
+                    const heroBottom = this.heroBody.position.y - (1 * 2.68);
+                    const elevatorTop = this.elevator.body.position.y + 0.5;
+                    if (heroBottom <= elevatorTop + 0.1) {
+                        this.heroBody.position.y = elevatorTop + (1 * 2.68);
+                    }
                 }
+
             }
-    
+            
+            
             this.hero.position.copy(this.heroBody.position);
             this.hero.rotation.y = this.camera.rotation.y;
     
@@ -1211,9 +1210,10 @@ class App {
             if (this.jump && Math.abs(velocity.y) < 0.1) {
                 velocity.y = 10;
                 this.jump = false;
+            } else if (velocity.y > 0 && velocity.y < 0.5 && !this.jump) {
+                velocity.y = 0; // Only clamp small upward velocities, allow falling
             }
             this.heroBody.velocity.set(forward.x * fSpeed + right.x * sSpeed, velocity.y, forward.z * fSpeed + right.z * sSpeed);
-    
             switch (this.cameraMode) {
                 case 'pov':
                     this.camera.position.copy(this.hero.position).add(new THREE.Vector3(0, 2.68, 0));
