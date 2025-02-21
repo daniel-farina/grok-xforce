@@ -56,7 +56,7 @@ class App {
     private bullets: { mesh: THREE.Mesh; body: CANNON.Body; owner: string }[] = [];
     private sparks: { mesh: THREE.Mesh; lifetime: number }[] = [];
     private buildings: { mesh: THREE.Object3D; body: CANNON.Body }[] = [];
-    private ammo: number = 50;
+    private ammo: number = 5000;
     private lives: number = 5;
     private health: number = 100;
     private hits: number = 0;
@@ -212,10 +212,11 @@ class App {
                     this.lobbyTitle.textContent = "Starting Single Player - Level 1";
                     this.readyButton.style.display = "none";
                     this.isReady = true;
+                    this.isPaused = true; // Pause until bots load
                     this.createScene({ x: 0, y: 100, z: 0 }).then(() => {
                         this.createBots();
                         this.lobby.style.display = "none";
-                        this.isPaused = false;
+                        // Do not unpause here; wait for bots to load in createBots
                         this.animate();
                     });
                 } else {
@@ -321,8 +322,18 @@ class App {
 
     private createBots(): void {
         const gltfLoader = new GLTFLoader();
-        const botCount = this.level;
-
+        const botCount = this.level; // 1 at Level 1, 2 at Level 2, etc.
+        console.log(`Creating ${botCount} bots for Level ${this.level}`);
+    
+        // Clear existing bots
+        this.bots.forEach((bot) => {
+            this.scene.remove(bot.mesh);
+            this.world.removeBody(bot.body);
+        });
+        this.bots.clear();
+    
+        let botsLoaded = 0;
+    
         for (let i = 0; i < botCount; i++) {
             const botId = `bot_${i}_${Date.now()}`;
             let x, z;
@@ -332,27 +343,27 @@ class App {
                 z = (Math.random() - 0.5) * 800;
                 attempts++;
             } while (!this.isPositionClear(new THREE.Vector3(x, 0, z), 10) && attempts < 100);
-
+    
             const difficulty = ['easy', 'medium', 'hard'][Math.floor(Math.random() * 3)] as 'easy' | 'medium' | 'hard';
-
+    
             gltfLoader.load('/assets/characters/character-male-a.glb', (gltf) => {
                 const mesh = gltf.scene;
                 mesh.scale.set(2.68, 2.68, 2.68);
                 mesh.position.set(x, 0, z);
                 this.scene.add(mesh);
-
+    
                 const body = new CANNON.Body({ mass: 1 });
                 body.addShape(new CANNON.Box(new CANNON.Vec3(0.5 * 2.68, 1 * 2.68, 0.5 * 2.68)));
                 body.position.set(x, 0, z);
                 this.world.addBody(body);
-
+    
                 const textGeometry = new THREE.PlaneGeometry(2, 0.5);
                 const textMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true });
                 const nameTag = new THREE.Mesh(textGeometry, textMaterial);
                 nameTag.position.y = 3;
                 nameTag.userData = { name: `Bot ${i}`, id: botId };
                 mesh.add(nameTag);
-
+    
                 const healthBar = new THREE.Group();
                 for (let j = 0; j < 5; j++) {
                     const dotGeometry = new THREE.CircleGeometry(0.2, 16);
@@ -362,28 +373,40 @@ class App {
                     healthBar.add(dot);
                 }
                 mesh.add(healthBar);
-
+    
                 const ammoGeometry = new THREE.PlaneGeometry(2, 0.2);
                 const ammoMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff });
                 const ammoBar = new THREE.Mesh(ammoGeometry, ammoMaterial);
                 ammoBar.position.y = 2.73;
                 mesh.add(ammoBar);
-
-                this.bots.set(botId, {
-                    id: botId,
-                    mesh,
-                    body,
-                    nameTag,
-                    healthBar,
-                    ammoBar,
-                    difficulty,
-                    shootTimer: Math.random() * 3000,
-                    fleeTimer: Math.random() * 5000,
-                    ammo: 50,
-                    health: 100,
-                    lives: 5,
-                    hits: 0
-                });
+    
+                if (!this.bots.has(botId)) {
+                    this.bots.set(botId, {
+                        id: botId,
+                        mesh,
+                        body,
+                        nameTag,
+                        healthBar,
+                        ammoBar,
+                        difficulty,
+                        shootTimer: Math.random() * 3000,
+                        fleeTimer: Math.random() * 5000,
+                        ammo: 50,
+                        health: 100,
+                        lives: 5,
+                        hits: 0
+                    });
+                    console.log(`Bot ${botId} added. Total bots: ${this.bots.size}`);
+                }
+    
+                this.updateIndicators(mesh, 100, 5, 50);
+    
+                // Track loading completion
+                botsLoaded++;
+                if (botsLoaded === botCount) {
+                    console.log(`All ${botCount} bots loaded for Level ${this.level}`);
+                    this.isPaused = false; // Resume game only after all bots are loaded
+                }
             });
         }
     }
@@ -1034,41 +1057,44 @@ class App {
 
     private updateOtherPlayer(socketId: string, player: PlayerData): void {
         if (socketId === this.socket.id) return;
-
+    
         if (!this.otherPlayers.has(socketId) && !this.loadingPlayers.has(socketId)) {
             this.loadingPlayers.add(socketId);
             const gltfLoader = new GLTFLoader();
             gltfLoader.load(`/assets/characters/${player.avatar || 'character-male-a.glb'}`, (gltf) => {
                 const mesh = gltf.scene;
                 mesh.scale.set(2.68, 2.68, 2.68);
+                mesh.position.set(player.position.x, player.position.y, player.position.z);
                 this.scene.add(mesh);
-
+    
                 const textGeometry = new THREE.PlaneGeometry(2, 0.5);
                 const textMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true });
                 const nameTag = new THREE.Mesh(textGeometry, textMaterial);
                 nameTag.position.y = 3;
-                nameTag.userData = { name: player.name };
+                nameTag.userData = { name: player.name, socketId };
                 mesh.add(nameTag);
-
+    
                 const healthBar = new THREE.Group();
                 for (let i = 0; i < 5; i++) {
                     const dotGeometry = new THREE.CircleGeometry(0.2, 16);
                     const dotMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
                     const dot = new THREE.Mesh(dotGeometry, dotMaterial);
-                    dot.position.set((i - 2) * 0.5, 2.33, 0);
+                    dot.position.set((i - 2) * 0.5, 2.33, 0); // Fixed 'j' to 'i'
                     healthBar.add(dot);
                 }
                 mesh.add(healthBar);
-
+    
                 const ammoGeometry = new THREE.PlaneGeometry(2, 0.2);
                 const ammoMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff });
                 const ammoBar = new THREE.Mesh(ammoGeometry, ammoMaterial);
                 ammoBar.position.y = 2.73;
                 mesh.add(ammoBar);
-
+    
                 this.otherPlayers.set(socketId, { mesh, nameTag, healthBar, ammoBar });
                 this.loadingPlayers.delete(socketId);
-                this.updateOtherPlayerPosition(socketId, player);
+    
+                // Initial update of indicators
+                this.updateIndicators(mesh, player.health, player.lives, player.ammo || 50);
             });
         } else {
             this.updateOtherPlayerPosition(socketId, player);
@@ -1080,21 +1106,22 @@ class App {
         if (playerObj) {
             playerObj.mesh.position.set(player.position.x, player.position.y, player.position.z);
             playerObj.mesh.rotation.y = player.rotation.y;
-            this.updateIndicators(playerObj.mesh, player.health, player.lives, player.ammo);
+            // Update indicators with current player data
+            this.updateIndicators(playerObj.mesh, player.health, player.lives, player.ammo || 50);
         }
     }
 
     private animate(): void {
         requestAnimationFrame(() => this.animate());
-
+    
         if (!this.isPaused && (this.roomId || this.isSinglePlayer)) {
             this.world.step(1 / 60);
-
+    
             if (this.elevator) {
                 this.elevatorTimer += 16.67;
                 let targetY: number;
                 let progress: number;
-
+    
                 switch (this.elevatorState) {
                     case "ground":
                         if (this.elevatorTimer >= this.elevatorWaitTime) {
@@ -1129,7 +1156,7 @@ class App {
                         }
                         break;
                 }
-
+    
                 const heroBox = new THREE.Box3().setFromObject(this.hero);
                 const elevatorBox = new THREE.Box3().setFromObject(this.elevator.mesh);
                 if (heroBox.intersectsBox(elevatorBox) && this.hero.position.y <= this.elevator.mesh.position.y + 0.5) {
@@ -1137,17 +1164,17 @@ class App {
                     this.hero.position.y = this.elevator.mesh.position.y + 2.68;
                 }
             }
-
+    
             this.hero.position.copy(this.heroBody.position);
             this.hero.rotation.y = this.camera.rotation.y;
-
+    
             const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
             forward.y = 0;
             forward.normalize();
             const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
             right.y = 0;
             right.normalize();
-
+    
             const SPEED = this.speedBoostActive ? this.boostSpeed : this.normalSpeed;
             let fSpeed = 0;
             let sSpeed = 0;
@@ -1155,14 +1182,14 @@ class App {
             if (this.moveBackward) fSpeed = -SPEED;
             if (this.moveRight) sSpeed = SPEED;
             if (this.moveLeft) sSpeed = -SPEED;
-
+    
             const velocity = this.heroBody.velocity;
             if (this.jump && Math.abs(velocity.y) < 0.1) {
                 velocity.y = 10;
                 this.jump = false;
             }
             this.heroBody.velocity.set(forward.x * fSpeed + right.x * sSpeed, velocity.y, forward.z * fSpeed + right.z * sSpeed);
-
+    
             switch (this.cameraMode) {
                 case 'pov':
                     this.camera.position.copy(this.hero.position).add(new THREE.Vector3(0, 2.68, 0));
@@ -1182,18 +1209,18 @@ class App {
                     this.camera.rotation.set(-Math.PI / 2, 0, 0);
                     break;
             }
-
+    
             if (!this.isSinglePlayer) {
                 this.socket.emit("updatePosition", {
                     position: this.hero.position,
                     rotation: { x: this.camera.rotation.x, y: this.camera.rotation.y, z: this.camera.rotation.z },
                 });
             }
-
+    
             this.bullets.forEach((bullet, bulletIndex) => {
                 bullet.mesh.position.copy(bullet.body.position);
                 bullet.mesh.quaternion.copy(bullet.body.quaternion);
-
+    
                 const heroDistance = bullet.mesh.position.distanceTo(this.hero.position);
                 const ownerId = this.isSinglePlayer ? "player" : this.socket.id;
                 if (bullet.owner !== ownerId && heroDistance < 3) {
@@ -1220,7 +1247,7 @@ class App {
                     }
                     return;
                 }
-
+    
                 if (this.isSinglePlayer) {
                     this.bots.forEach((bot) => {
                         if (bullet.owner !== bot.id) {
@@ -1262,7 +1289,7 @@ class App {
                     });
                 }
             });
-
+    
             this.ammoPickups.forEach((pickup, index) => {
                 const heroDistance = this.hero.position.distanceTo(pickup.mesh.position);
                 if (heroDistance < 3) {
@@ -1275,7 +1302,7 @@ class App {
                     this.ammoPickups.splice(index, 1);
                     return;
                 }
-
+    
                 if (this.isSinglePlayer) {
                     this.bots.forEach((bot) => {
                         const botDistance = bot.mesh.position.distanceTo(pickup.mesh.position);
@@ -1289,14 +1316,14 @@ class App {
                     });
                 }
             });
-
+    
             this.thunderBoosts.forEach((boost, index) => {
                 const distance = this.hero.position.distanceTo(boost.mesh.position);
                 if (distance < 3) {
                     this.scene.remove(boost.mesh);
                     this.world.removeBody(boost.body);
                     this.thunderBoosts.splice(index, 1);
-
+    
                     this.speedBoostActive = true;
                     if (this.boostTimeout) clearTimeout(this.boostTimeout);
                     this.boostTimeout = setTimeout(() => {
@@ -1306,7 +1333,7 @@ class App {
                     this.speedBoostCounter.textContent = `Speed Boost: Active (${this.boostDuration / 1000}s)`;
                 }
             });
-
+    
             this.sparks.forEach((spark, index) => {
                 spark.lifetime -= 16.67;
                 if (spark.lifetime <= 0) {
@@ -1316,25 +1343,22 @@ class App {
                     spark.mesh.scale.multiplyScalar(0.95);
                 }
             });
-
+    
             if (this.isSinglePlayer) {
                 this.updateBotBehavior();
             }
-
-            // Render main scene
+    
             this.renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
             this.renderer.setScissorTest(false);
             this.renderer.render(this.scene, this.camera);
-
-            // Render mini-map
+    
             const miniMapSize = 150;
             this.renderer.setViewport(window.innerWidth - miniMapSize - 10, 10, miniMapSize, miniMapSize);
             this.renderer.setScissor(window.innerWidth - miniMapSize - 10, 10, miniMapSize, miniMapSize);
             this.renderer.setScissorTest(true);
             this.renderer.setClearColor(0x000000, 0.5);
             this.renderer.clear();
-
-            // Ensure only relevant objects are visible for mini-map
+    
             this.scene.traverse((object) => {
                 if (object === this.hero || 
                     (object.userData && this.bots.has(object.userData.id)) || 
@@ -1345,12 +1369,11 @@ class App {
                     object.visible = false;
                 }
             });
-
-            // Safe render for mini-map
+    
             if (this.miniMapCamera && this.scene) {
                 this.renderer.render(this.scene, this.miniMapCamera);
             }
-
+    
             this.renderer.setScissorTest(false);
             this.scene.traverse((object) => object.visible = true);
         }
