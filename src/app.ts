@@ -27,9 +27,7 @@ interface Bot {
     id: string;
     mesh: THREE.Object3D;
     body: CANNON.Body;
-    nameTag: THREE.Mesh;
     healthBar: THREE.Group;
-    ammoBar: THREE.Mesh;
     difficulty: 'easy' | 'medium' | 'hard';
     shootTimer: number;
     fleeTimer: number;
@@ -49,7 +47,7 @@ class App {
     private canvas!: HTMLCanvasElement;
     private hero!: THREE.Object3D;
     private heroBody!: CANNON.Body;
-    private otherPlayers: Map<string, { mesh: THREE.Object3D; nameTag: THREE.Mesh; healthBar: THREE.Group; ammoBar: THREE.Mesh }> = new Map();
+    private otherPlayers: Map<string, { mesh: THREE.Object3D; healthBar: THREE.Group }> = new Map();
     private bots: Map<string, Bot> = new Map();
     private isLoadingBots: boolean = false;
     private levelCounter!: HTMLElement;
@@ -78,9 +76,9 @@ class App {
     private ammoWarning!: HTMLElement;
     private pauseMenu!: HTMLElement;
     private lobby!: HTMLElement;
+    private lobbyTitle!: HTMLElement;
     private hud!: HTMLElement;
 
-    private lobbyTitle!: HTMLElement;
     private resumeButton!: HTMLElement;
     private joinButton!: HTMLElement;
     private singlePlayerButton!: HTMLElement;
@@ -136,10 +134,8 @@ class App {
     private currentCharacterIndex: number = 0;
     private currentScreen: 'username' | 'character' | 'difficulty' = 'username';
 
-
     constructor() {
         this.initialize();
-        
         this.miniMapCamera = new THREE.OrthographicCamera(-400, 400, 400, -400, 1, 1000);
         this.miniMapCamera.position.set(0, 200, 0);
         this.miniMapCamera.lookAt(0, 0, 0);
@@ -154,18 +150,15 @@ class App {
             this.renderer.setSize(window.innerWidth, window.innerHeight);
             this.world.gravity.set(0, -20, 0);
 
-            // Assign DOM elements with null checks
             this.assignDomElements();
-
             this.setupCharacterPreview();
             this.lobby.style.display = "block";
 
             this.setupSocketEvents();
-            this.setupInput(); // Will handle arrow keys now
+            this.setupInput();
             this.handleResize();
             window.addEventListener('resize', () => this.handleResize());
 
-            // Load initial character
             this.loadCharacterPreview(this.characters[this.currentCharacterIndex]);
         };
 
@@ -202,7 +195,7 @@ class App {
         this.characterSelection = document.getElementById("characterSelection") as HTMLElement;
         this.characterPreview = document.getElementById("characterPreviewCanvas") as HTMLElement;
         this.difficultySelection = document.getElementById("difficultySelection") as HTMLElement;
-         this.hud = document.getElementById("hud") as HTMLElement;
+        this.hud = document.getElementById("hud") as HTMLElement;
     }
 
     private setupCharacterPreview(): void {
@@ -234,7 +227,7 @@ class App {
 
         gltfLoader.load(`/assets/characters/${modelPath}`, (gltf) => {
             this.characterPreviewModel = gltf.scene;
-            this.characterPreviewModel.scale.set(2.68, 2.68, 2.68); // Adjust scale as needed
+            this.characterPreviewModel.scale.set(2.68, 2.68, 2.68);
             this.characterPreviewModel.position.set(0, 0, 0);
             this.characterPreviewScene.add(this.characterPreviewModel);
             this.animateCharacterPreview();
@@ -258,7 +251,6 @@ class App {
         }
     }
 
-
     private setupSocketEvents(): void {
         this.joinButton.addEventListener("click", () => this.startLobby('multiplayer'));
         this.singlePlayerButton.addEventListener("click", () => this.startLobby('singleplayer'));
@@ -270,7 +262,7 @@ class App {
                     const rng = seedrandom(this.roomId);
                     Math.random = () => rng();
                     this.lobby.style.display = "none";
-                    this.hud.style.display = "flex"; // Add this line here
+                    this.hud.style.display = "flex";
                     this.isReady = true;
                     this.isPaused = true;
                     this.createScene({ x: 0, y: 2.68, z: 0 }).then(() => {
@@ -308,8 +300,8 @@ class App {
                     this.lobbyTitle.textContent = `Starting Single Player - Level ${this.level}`;
                     this.readyButton.style.display = "none";
                     this.isReady = true;
-                    this.isPaused = true; // Pause until scene loads
-                    this.createScene({ x: 0, y: 2.68, z: 0 }).then(() => { // Start on ground
+                    this.isPaused = true;
+                    this.createScene({ x: 0, y: 2.68, z: 0 }).then(() => {
                         this.createBots();
                         this.lobby.style.display = "none";
                         this.animate();
@@ -389,11 +381,10 @@ class App {
         this.socket.on("gameEnded", ({ winnerSocketId }: { winnerSocketId: string }) => {
             this.isPaused = true;
             this.pauseMenu.style.display = "block";
-            alert(`Game Over! Winner: ${this.otherPlayers.get(winnerSocketId)?.nameTag.userData.name || "Unknown"}`);
+            alert(`Game Over! Winner: ${this.otherPlayers.get(winnerSocketId)?.mesh.userData.name || "Unknown"}`);
             this.resetGameForNewRoom();
         });
     }
-
 
     private startLobby(mode: 'multiplayer' | 'singleplayer'): void {
         const username = this.usernameInput.value.trim();
@@ -434,19 +425,19 @@ class App {
     private createBots(): void {
         if (this.isLoadingBots) return;
         this.isLoadingBots = true;
-    
+
         const gltfLoader = new GLTFLoader();
         const botCount = this.level;
         console.log(`Creating ${botCount} bots for Level ${this.level}`);
-    
+
         this.bots.forEach((bot) => {
             this.scene.remove(bot.mesh);
             this.world.removeBody(bot.body);
         });
         this.bots.clear();
-    
+
         let botsLoaded = 0;
-    
+
         for (let i = 0; i < botCount; i++) {
             const botId = `bot_${i}_${Date.now()}`;
             let x, z;
@@ -456,34 +447,27 @@ class App {
                 z = (Math.random() - 0.5) * 800;
                 attempts++;
             } while (!this.isPositionClear(new THREE.Vector3(x, 0, z), 10) && attempts < 100);
-    
+
             if (attempts >= 100) {
                 console.warn(`Could not find clear position for bot ${botId}`);
-                x = (Math.random() - 0.5) * 800; // Fallback position
+                x = (Math.random() - 0.5) * 800;
                 z = (Math.random() - 0.5) * 800;
             }
-    
+
             const difficulty = ['easy', 'medium', 'hard'][Math.floor(Math.random() * 3)] as 'easy' | 'medium' | 'hard';
-    
+
             gltfLoader.load('/assets/characters/character-male-a.glb', (gltf) => {
                 const mesh = gltf.scene;
                 mesh.scale.set(2.68, 2.68, 2.68);
                 mesh.position.set(x, 0, z);
                 this.scene.add(mesh);
                 console.log(`Bot ${botId} mesh added at position: ${x}, 0, ${z}`);
-    
+
                 const body = new CANNON.Body({ mass: 1 });
                 body.addShape(new CANNON.Box(new CANNON.Vec3(0.5 * 2.68, 1 * 2.68, 0.5 * 2.68)));
                 body.position.set(x, 0, z);
                 this.world.addBody(body);
-    
-                const textGeometry = new THREE.PlaneGeometry(2, 0.5);
-                const textMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true });
-                const nameTag = new THREE.Mesh(textGeometry, textMaterial);
-                nameTag.position.y = 3;
-                nameTag.userData = { name: `Bot ${i}`, id: botId };
-                mesh.add(nameTag);
-    
+
                 const healthBar = new THREE.Group();
                 for (let j = 0; j < 5; j++) {
                     const dotGeometry = new THREE.CircleGeometry(0.2, 16);
@@ -493,22 +477,13 @@ class App {
                     healthBar.add(dot);
                 }
                 mesh.add(healthBar);
-    
-                const ammoTextGeometry = new THREE.PlaneGeometry(2, 0.5);
-                const ammoTextMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff, transparent: true });
-                const ammoText = new THREE.Mesh(ammoTextGeometry, ammoTextMaterial);
-                ammoText.position.y = 2.5;
-                ammoText.userData = { ammo: 50 };
-                mesh.add(ammoText);
-    
+
                 if (!this.bots.has(botId)) {
                     this.bots.set(botId, {
                         id: botId,
                         mesh,
                         body,
-                        nameTag,
                         healthBar,
-                        ammoBar: ammoText,  // Update this type in the Bot interface too
                         difficulty,
                         shootTimer: Math.random() * 3000,
                         fleeTimer: Math.random() * 5000,
@@ -518,9 +493,9 @@ class App {
                         hits: 0
                     });
                 }
-    
+
                 this.updateIndicators(mesh, 100, 5, 50);
-    
+
                 botsLoaded++;
                 if (botsLoaded === botCount) {
                     console.log(`All ${botCount} bots loaded for Level ${this.level}`);
@@ -532,13 +507,12 @@ class App {
     }
 
     private isPositionClear(pos: THREE.Vector3, minDistance: number): boolean {
-      // Check elevator area (30x30 square centered at 0,0)
-        const elevatorHalfSize = 15; // Half of 30
+        const elevatorHalfSize = 15;
         if (Math.abs(pos.x) < elevatorHalfSize + minDistance && 
             Math.abs(pos.z) < elevatorHalfSize + minDistance) {
             return false;
         }
-       
+
         for (const building of this.buildings) {
             const distance = pos.distanceTo(building.mesh.position);
             const buildingSize = new THREE.Box3().setFromObject(building.mesh).getSize(new THREE.Vector3());
@@ -551,7 +525,7 @@ class App {
             if (pos.distanceTo(boost.mesh.position) < minDistance) return false;
         }
         for (const bot of this.bots.values()) {
-            if (pos.distanceTo(bot.mesh.position) < minDistance * 2) return false; // Increased spacing between bots
+            if (pos.distanceTo(bot.mesh.position) < minDistance * 2) return false;
         }
         for (const player of this.otherPlayers.values()) {
             if (pos.distanceTo(player.mesh.position) < minDistance) return false;
@@ -559,18 +533,18 @@ class App {
         if (this.hero && pos.distanceTo(this.hero.position) < minDistance) return false;
         return true;
     }
+
     private updateBotBehavior(): void {
         this.bots.forEach((bot) => {
-            // Existing bot AI logic remains unchanged
             const directionToPlayer = this.hero.position.clone().sub(bot.mesh.position).normalize();
             const distanceToPlayer = bot.mesh.position.distanceTo(this.hero.position);
             const pursuitSpeed = this.normalSpeed;
-    
+
             bot.fleeTimer += 16.67;
             const fleeDuration = 3000;
             const pursueDuration = 5000;
             const cycleTime = fleeDuration + pursueDuration;
-    
+
             if (bot.ammo === 0 || (bot.fleeTimer % cycleTime < fleeDuration && distanceToPlayer < 50)) {
                 const fleeDirection = bot.ammo === 0 && this.ammoPickups.length > 0
                     ? this.ammoPickups.reduce((closest, pickup) => {
@@ -592,7 +566,7 @@ class App {
             } else {
                 bot.body.velocity.set(0, bot.body.velocity.y, 0);
             }
-    
+
             const shootInterval = bot.difficulty === 'easy' ? 3000 : bot.difficulty === 'medium' ? 2000 : 1000;
             bot.shootTimer += 16.67;
             if (bot.shootTimer > shootInterval && distanceToPlayer < 100 && bot.ammo > 0 && distanceToPlayer > 10) {
@@ -608,19 +582,20 @@ class App {
                 bot.shootTimer = Math.random() * 1000;
                 this.updateIndicators(bot.mesh, bot.health, bot.lives, bot.ammo);
             }
-    
+
             bot.mesh.position.copy(bot.body.position);
             bot.mesh.rotation.y = Math.atan2(directionToPlayer.x, directionToPlayer.z);
         });
-    
+
         if (this.isSinglePlayer && this.bots.size === 0 && !this.isLoadingBots) {
             this.level++;
-            this.levelCounter.textContent = `Level: ${this.level}`; // Update UI
+            this.levelCounter.textContent = `Level: ${this.level}`;
             this.lobbyTitle.textContent = `Starting Single Player - Level ${this.level}`;
-            this.isPaused = true; // Pause until bots load
-            this.createBots(); // Just spawn new bots, don’t recreate scene
+            this.isPaused = true;
+            this.createBots();
         }
     }
+
     private updateIndicators(character: THREE.Object3D, health: number, lives: number, ammo: number): void {
         const healthBar = character.children.find(child => child instanceof THREE.Group && child.children.length === 5) as THREE.Group;
         if (healthBar) {
@@ -639,19 +614,9 @@ class App {
                 }
             }
         }
-
-    // Update ammo text instead of bar
-    const ammoText = character.children.find(child => child instanceof THREE.Mesh && child.userData.ammo !== undefined) as THREE.Mesh;
-    if (ammoText) {
-        ammoText.userData.ammo = ammo;
-        // Note: Three.js doesn't have built-in text rendering, so we'll update the HUD instead
-        // The actual text display will be handled by the HTML ammoCounter element
-    }
     }
 
     private setupInput(): void {
-
-
         document.addEventListener("keydown", (event) => {
             if (this.currentScreen === 'character') {
                 switch (event.key) {
@@ -675,7 +640,7 @@ class App {
                 this.readyButton.click();
             }
         });
-    
+
         const difficultyButtons = Array.from(this.difficultySelection.getElementsByTagName("button"));
         difficultyButtons.forEach(button => {
             if (button.id !== "readyButton") {
@@ -746,7 +711,6 @@ class App {
             this.ammo--;
             this.ammoCounter.textContent = `Ammo: ${this.ammo}`;
             this.updateAmmoWarning();
-            this.updateIndicators(this.hero, this.health, this.lives, this.ammo);
 
             const direction = this.camera.getWorldDirection(new THREE.Vector3());
             if (this.isSinglePlayer) {
@@ -760,7 +724,6 @@ class App {
             }
         });
     }
-
 
     private updateAmmoWarning(): void {
         if (this.ammo <= 0) {
@@ -878,14 +841,7 @@ class App {
         this.hero.scale.set(2.68, 2.68, 2.68);
         this.hero.position.set(initialPosition?.x || 0, initialPosition?.y || 2.68, initialPosition?.z || 0);
         this.scene.add(this.hero);
-    
-        const textGeometry = new THREE.PlaneGeometry(2, 0.5);
-        const textMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true });
-        const nameTag = new THREE.Mesh(textGeometry, textMaterial);
-        nameTag.position.y = 3;
-        nameTag.userData = { name: this.playerName || "Player" };
-        this.hero.add(nameTag);
-    
+
         const healthBar = new THREE.Group();
         for (let i = 0; i < 5; i++) {
             const dotGeometry = new THREE.CircleGeometry(0.2, 16);
@@ -895,27 +851,18 @@ class App {
             healthBar.add(dot);
         }
         this.hero.add(healthBar);
-    
-        // Replace ammo bar with text
-        const ammoTextGeometry = new THREE.PlaneGeometry(2, 0.5);
-        const ammoTextMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff, transparent: true });
-        const ammoText = new THREE.Mesh(ammoTextGeometry, ammoTextMaterial);
-        ammoText.position.y = 2.5;  // Position below name tag
-        ammoText.userData = { ammo: this.ammo };
-        this.hero.add(ammoText);
-    
-        // Hero physics with cylinder shape and material
-        const heroMaterial = new CANNON.Material({ friction: 1.0, restitution: 0 }); // Increased friction
+
+        const heroMaterial = new CANNON.Material({ friction: 1.0, restitution: 0 });
         this.heroBody = new CANNON.Body({ mass: 1, material: heroMaterial });
         this.heroBody.addShape(new CANNON.Cylinder(0.5 * 2.68, 0.5 * 2.68, 2 * 2.68, 16));
         this.heroBody.position.set(initialPosition?.x || 0, initialPosition?.y || 2.68, initialPosition?.z || 0);
-        this.heroBody.linearDamping = 0; // Removed damping for full gravity effect
+        this.heroBody.linearDamping = 0;
         this.world.addBody(this.heroBody);
         this.heroReady = true;
         while (this.pendingPlayersUpdates.length > 0) {
             this.processPlayersUpdate(this.pendingPlayersUpdates.shift()!);
         }
-    
+
         const textureLoader = new THREE.TextureLoader();
         const groundTexture = textureLoader.load('/assets/textures/ground.jpg');
         groundTexture.wrapS = groundTexture.wrapT = THREE.RepeatWrapping;
@@ -926,62 +873,61 @@ class App {
         ground.rotation.x = -Math.PI / 2;
         ground.position.y = -1;
         this.scene.add(ground);
-    
-        // Ground physics with material
+
         const groundPhysicsMaterial = new CANNON.Material({ friction: 0.5, restitution: 0 });
         const groundBody = new CANNON.Body({ mass: 0, material: groundPhysicsMaterial });
         groundBody.addShape(new CANNON.Plane());
         groundBody.position.set(0, -1, 0);
         groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
         this.world.addBody(groundBody);
-    
+
         const streetWidth = 10;
         const sidewalkWidth = 3;
         const streetSpacing = 50;
         const streetMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
         const sidewalkMaterial = new THREE.MeshStandardMaterial({ color: 0x888888 });
-    
+
         for (let x = -400; x <= 400; x += streetSpacing) {
             const streetX = new THREE.Mesh(new THREE.PlaneGeometry(800, streetWidth), streetMaterial);
             streetX.rotation.x = -Math.PI / 2;
             streetX.position.set(x, -0.95, 0);
             this.scene.add(streetX);
-    
+
             const sidewalkX1 = new THREE.Mesh(new THREE.PlaneGeometry(800, sidewalkWidth), sidewalkMaterial);
             sidewalkX1.rotation.x = -Math.PI / 2;
             sidewalkX1.position.set(x - streetWidth / 2 - sidewalkWidth / 2, -0.9, 0);
             this.scene.add(sidewalkX1);
-    
+
             const sidewalkX2 = new THREE.Mesh(new THREE.PlaneGeometry(800, sidewalkWidth), sidewalkMaterial);
             sidewalkX2.rotation.x = -Math.PI / 2;
             sidewalkX2.position.set(x + streetWidth / 2 + sidewalkWidth / 2, -0.9, 0);
             this.scene.add(sidewalkX2);
         }
-    
+
         for (let z = -400; z <= 400; z += streetSpacing) {
             const streetZ = new THREE.Mesh(new THREE.PlaneGeometry(streetWidth, 800), streetMaterial);
             streetZ.rotation.x = -Math.PI / 2;
             streetZ.position.set(0, -0.95, z);
             this.scene.add(streetZ);
-    
+
             const sidewalkZ1 = new THREE.Mesh(new THREE.PlaneGeometry(streetWidth, 800), sidewalkMaterial);
             sidewalkZ1.rotation.x = -Math.PI / 2;
             sidewalkZ1.position.set(0, -0.9, z - streetWidth / 2 - sidewalkWidth / 2);
             this.scene.add(sidewalkZ1);
-    
+
             const sidewalkZ2 = new THREE.Mesh(new THREE.PlaneGeometry(streetWidth, 800), sidewalkMaterial);
             sidewalkZ2.rotation.x = -Math.PI / 2;
             sidewalkZ2.position.set(0, -0.9, z + streetWidth / 2 + sidewalkWidth / 2);
             this.scene.add(sidewalkZ2);
         }
-    
+
         const skyscrapers = ["skyscraperA.glb", "skyscraperB.glb", "skyscraperC.glb"];
         const largeBuildings = ["large_buildingA.glb", "large_buildingB.glb", "large_buildingC.glb"];
         const lowBuildings = ["low_buildingA.glb", "low_buildingB.glb", "low_buildingC.glb"];
         const cars = ["sedan.glb", "suv.glb", "taxi.glb"];
-    
+
         const staticMaterial = new CANNON.Material({ friction: 0.5, restitution: 0 });
-    
+
         const loadModel = (path: string, position: THREE.Vector3, scale: number, rotationY = 0): Promise<THREE.Object3D> => {
             return new Promise((resolve) => {
                 gltfLoader.load(path, (gltf) => {
@@ -991,7 +937,7 @@ class App {
                     model.position.copy(position);
                     model.position.y = -1;
                     this.scene.add(model);
-    
+
                     const bbox = new THREE.Box3().setFromObject(model);
                     const size = new THREE.Vector3();
                     bbox.getSize(size);
@@ -1001,12 +947,12 @@ class App {
                     body.quaternion.copy(model.quaternion);
                     this.world.addBody(body);
                     this.buildings.push({ mesh: model, body });
-    
+
                     resolve(model);
                 });
             });
         };
-    
+
         for (let x = -400; x <= 400; x += streetSpacing) {
             for (let z = -400; z <= 400; z += streetSpacing) {
                 if (Math.abs(x) < streetWidth / 2 || Math.abs(z) < streetWidth / 2) continue;
@@ -1020,7 +966,7 @@ class App {
                     spawnZ = z + (Math.random() - 0.5) * streetSpacing;
                     attempts++;
                 } while (!this.isPositionClear(new THREE.Vector3(spawnX, -1, spawnZ), 10) && attempts < 50);
-    
+
                 if (distance < 100 && this.isPositionClear(new THREE.Vector3(spawnX, -1, spawnZ), 10)) {
                     buildingType = skyscrapers;
                     scale = 30;
@@ -1033,7 +979,7 @@ class App {
                 } else {
                     continue;
                 }
-    
+
                 const offset = streetWidth / 2 + sidewalkWidth + 5;
                 const positions = [
                     new THREE.Vector3(spawnX + offset, -1, spawnZ),
@@ -1041,7 +987,7 @@ class App {
                     new THREE.Vector3(spawnX, -1, spawnZ + offset),
                     new THREE.Vector3(spawnX, -1, spawnZ - offset)
                 ];
-    
+
                 for (const pos of positions) {
                     if (this.isPositionClear(pos, 10)) {
                         await loadModel(
@@ -1054,7 +1000,7 @@ class App {
                 }
             }
         }
-    
+
         for (let i = 0; i < 20; i++) {
             const carModel = cars[Math.floor(Math.random() * cars.length)];
             const isXStreet = Math.random() > 0.5;
@@ -1072,7 +1018,7 @@ class App {
                 }
                 attempts++;
             } while (!this.isPositionClear(new THREE.Vector3(x, 0, z), 10) && attempts < 50);
-    
+
             if (Math.abs(x) > streetWidth / 2 && Math.abs(z) > streetWidth / 2) {
                 await loadModel(
                     `/assets/cars/${carModel}`,
@@ -1086,12 +1032,12 @@ class App {
                 });
             }
         }
-    
+
         const skyGeometry = new THREE.SphereGeometry(1000, 32, 32);
         const skyMaterial = new THREE.MeshBasicMaterial({ color: 0x001133, side: THREE.BackSide });
         const sky = new THREE.Mesh(skyGeometry, skyMaterial);
         this.scene.add(sky);
-    
+
         const starGeometry = new THREE.BufferGeometry();
         const starCount = 2000;
         const positions = new Float32Array(starCount * 3);
@@ -1104,7 +1050,7 @@ class App {
         const starMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 1, sizeAttenuation: true });
         const stars = new THREE.Points(starGeometry, starMaterial);
         this.scene.add(stars);
-    
+
         const ambientLight = new THREE.AmbientLight(0x404060, 2.0);
         this.scene.add(ambientLight);
         const light1 = new THREE.DirectionalLight(0x8080ff, 1.0);
@@ -1114,20 +1060,19 @@ class App {
         const light2 = new THREE.DirectionalLight(0x8080ff, 0.5);
         light2.position.set(-100, 100, -100);
         this.scene.add(light2);
-    
-        // Create elevator at center (0,0) instead of (100,100)
+
         const elevatorGeometry = new THREE.BoxGeometry(30, 1, 30);
         const elevatorMaterial = new THREE.MeshStandardMaterial({ color: 0x666666 });
         const elevatorMesh = new THREE.Mesh(elevatorGeometry, elevatorMaterial);
-        elevatorMesh.position.set(0, -0.25, 0);  // Center of city
+        elevatorMesh.position.set(0, -0.25, 0);
         this.scene.add(elevatorMesh);
 
         const elevatorBody = new CANNON.Body({ mass: 0, material: staticMaterial });
         elevatorBody.addShape(new CANNON.Box(new CANNON.Vec3(15, 0.5, 15)));
-        elevatorBody.position.set(0, -0.25, 0);  // Center of city
+        elevatorBody.position.set(0, -0.25, 0);
         this.world.addBody(elevatorBody);
         this.elevator = { mesh: elevatorMesh, body: elevatorBody };
-    
+
         const ammoPickupMaterial = new THREE.MeshStandardMaterial({ color: 0xffff00 });
         for (let i = 0; i < 80; i++) {
             let x, z;
@@ -1137,7 +1082,7 @@ class App {
                 z = Math.round((Math.random() * 800 - 400) / streetSpacing) * streetSpacing + (streetWidth / 2 + sidewalkWidth / 2);
                 attempts++;
             } while (!this.isPositionClear(new THREE.Vector3(x, 0.5, z), 10) && attempts < 50);
-    
+
             if (Math.abs(x) > streetWidth && Math.abs(z) > streetWidth) {
                 const ammoBox = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), ammoPickupMaterial);
                 ammoBox.position.set(x, 0.5, z);
@@ -1149,7 +1094,7 @@ class App {
                 this.ammoPickups.push({ mesh: ammoBox, body: ammoBody });
             }
         }
-    
+
         const thunderGeometry = new THREE.ConeGeometry(0.5, 2, 8);
         const thunderMaterial = new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x00ffff, emissiveIntensity: 0.5 });
         for (let i = 0; i < 40; i++) {
@@ -1160,12 +1105,12 @@ class App {
                 z = Math.round((Math.random() * 800 - 400) / streetSpacing) * streetSpacing + (streetWidth / 2 + sidewalkWidth / 2);
                 attempts++;
             } while (!this.isPositionClear(new THREE.Vector3(x, 1, z), 10) && attempts < 50);
-    
+
             if (Math.abs(x) > streetWidth && Math.abs(z) > streetWidth) {
                 const thunder = new THREE.Mesh(thunderGeometry, thunderMaterial);
                 thunder.position.set(x, 1, z);
                 this.scene.add(thunder);
-    
+
                 const thunderBody = new CANNON.Body({ mass: 0, material: staticMaterial });
                 thunderBody.addShape(new CANNON.Cylinder(0.5, 0.5, 2, 8));
                 thunderBody.position.copy(thunder.position);
@@ -1173,7 +1118,7 @@ class App {
                 this.thunderBoosts.push({ mesh: thunder, body: thunderBody });
             }
         }
-    
+
         const treeMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22 });
         for (let i = 0; i < 100; i++) {
             let x, z;
@@ -1183,7 +1128,7 @@ class App {
                 z = Math.round((Math.random() * 800 - 400) / streetSpacing) * streetSpacing + (streetWidth / 2 + sidewalkWidth / 2);
                 attempts++;
             } while (!this.isPositionClear(new THREE.Vector3(x, 1, z), 10) && attempts < 50);
-    
+
             if (Math.abs(x) > streetWidth && Math.abs(z) > streetWidth) {
                 const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 3), treeMaterial);
                 const foliage = new THREE.Mesh(new THREE.SphereGeometry(2, 12, 12), treeMaterial);
@@ -1192,13 +1137,13 @@ class App {
                 this.scene.add(trunk, foliage);
             }
         }
-    
-        this.camera.position.set(0, 2.68, -15); // Adjusted to match hero height
+
+        this.camera.position.set(0, 2.68, -15);
     }
 
     private updateOtherPlayer(socketId: string, player: PlayerData): void {
         if (socketId === this.socket.id) return;
-    
+
         if (!this.otherPlayers.has(socketId) && !this.loadingPlayers.has(socketId)) {
             this.loadingPlayers.add(socketId);
             const gltfLoader = new GLTFLoader();
@@ -1207,14 +1152,7 @@ class App {
                 mesh.scale.set(2.68, 2.68, 2.68);
                 mesh.position.set(player.position.x, player.position.y, player.position.z);
                 this.scene.add(mesh);
-    
-                const textGeometry = new THREE.PlaneGeometry(2, 0.5);
-                const textMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true });
-                const nameTag = new THREE.Mesh(textGeometry, textMaterial);
-                nameTag.position.y = 3;
-                nameTag.userData = { name: player.name, socketId };
-                mesh.add(nameTag);
-    
+
                 const healthBar = new THREE.Group();
                 for (let i = 0; i < 5; i++) {
                     const dotGeometry = new THREE.CircleGeometry(0.2, 16);
@@ -1224,18 +1162,10 @@ class App {
                     healthBar.add(dot);
                 }
                 mesh.add(healthBar);
-    
-                // Replace ammo bar with text
-                const ammoTextGeometry = new THREE.PlaneGeometry(2, 0.5);
-                const ammoTextMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff, transparent: true });
-                const ammoText = new THREE.Mesh(ammoTextGeometry, ammoTextMaterial);
-                ammoText.position.y = 2.5;
-                ammoText.userData = { ammo: player.ammo || 50 };
-                mesh.add(ammoText);
-    
-                this.otherPlayers.set(socketId, { mesh, nameTag, healthBar, ammoBar: ammoText });
+
+                this.otherPlayers.set(socketId, { mesh, healthBar });
                 this.loadingPlayers.delete(socketId);
-    
+
                 this.updateIndicators(mesh, player.health, player.lives, player.ammo || 50);
             });
         } else {
@@ -1248,21 +1178,20 @@ class App {
         if (playerObj) {
             playerObj.mesh.position.set(player.position.x, player.position.y, player.position.z);
             playerObj.mesh.rotation.y = player.rotation.y;
-            // Update indicators with current player data
             this.updateIndicators(playerObj.mesh, player.health, player.lives, player.ammo || 50);
         }
     }
 
     private animate(): void {
         requestAnimationFrame(() => this.animate());
-    
+
         if (!this.isPaused && (this.roomId || this.isSinglePlayer)) {
             this.world.step(1 / 60);
             if (this.elevator) {
                 this.elevatorTimer += 16.67;
                 let targetY: number;
                 let progress: number;
-            
+
                 switch (this.elevatorState) {
                     case "ground":
                         if (this.elevatorTimer >= this.elevatorWaitTime) {
@@ -1298,12 +1227,11 @@ class App {
                         break;
                 }
 
-                // Modified to only lift hero if within elevator bounds
-                const elevatorHalfSize = 15; // Half of 30x30
+                const elevatorHalfSize = 15;
                 const heroPos = this.heroBody.position;
                 const isOnElevator = Math.abs(heroPos.x) < elevatorHalfSize && 
                                   Math.abs(heroPos.z) < elevatorHalfSize;
-                
+
                 if (isOnElevator) {
                     const heroBottom = this.heroBody.position.y - (1 * 2.68);
                     const elevatorTop = this.elevator.body.position.y + 0.5;
@@ -1311,20 +1239,18 @@ class App {
                         this.heroBody.position.y = elevatorTop + (1 * 2.68);
                     }
                 }
-
             }
-            
-            
+
             this.hero.position.copy(this.heroBody.position);
             this.hero.rotation.y = this.camera.rotation.y;
-    
+
             const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
             forward.y = 0;
             forward.normalize();
             const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
             right.y = 0;
             right.normalize();
-    
+
             const SPEED = this.speedBoostActive ? this.boostSpeed : this.normalSpeed;
             let fSpeed = 0;
             let sSpeed = 0;
@@ -1332,13 +1258,13 @@ class App {
             if (this.moveBackward) fSpeed = -SPEED;
             if (this.moveRight) sSpeed = SPEED;
             if (this.moveLeft) sSpeed = -SPEED;
-    
+
             const velocity = this.heroBody.velocity;
             if (this.jump && Math.abs(velocity.y) < 0.1) {
                 velocity.y = 10;
                 this.jump = false;
             } else if (velocity.y > 0 && velocity.y < 0.5 && !this.jump) {
-                velocity.y = 0; // Only clamp small upward velocities, allow falling
+                velocity.y = 0;
             }
             this.heroBody.velocity.set(forward.x * fSpeed + right.x * sSpeed, velocity.y, forward.z * fSpeed + right.z * sSpeed);
             switch (this.cameraMode) {
@@ -1360,18 +1286,18 @@ class App {
                     this.camera.rotation.set(-Math.PI / 2, 0, 0);
                     break;
             }
-    
+
             if (!this.isSinglePlayer) {
                 this.socket.emit("updatePosition", {
                     position: this.hero.position,
                     rotation: { x: this.camera.rotation.x, y: this.camera.rotation.y, z: this.camera.rotation.z },
                 });
             }
-    
+
             this.bullets.forEach((bullet, bulletIndex) => {
                 bullet.mesh.position.copy(bullet.body.position);
                 bullet.mesh.quaternion.copy(bullet.body.quaternion);
-    
+
                 const heroDistance = bullet.mesh.position.distanceTo(this.hero.position);
                 const ownerId = this.isSinglePlayer ? "player" : this.socket.id;
                 if (bullet.owner !== ownerId && heroDistance < 3) {
@@ -1398,7 +1324,7 @@ class App {
                     }
                     return;
                 }
-    
+
                 if (this.isSinglePlayer) {
                     console.log(`Updating ${this.bots.size} bots`);
                     this.bots.forEach((bot) => {
@@ -1441,20 +1367,19 @@ class App {
                     });
                 }
             });
-    
+
             this.ammoPickups.forEach((pickup, index) => {
                 const heroDistance = this.hero.position.distanceTo(pickup.mesh.position);
                 if (heroDistance < 3) {
                     this.ammo += 10;
                     this.ammoCounter.textContent = `Ammo: ${this.ammo}`;
                     this.updateAmmoWarning();
-                    this.updateIndicators(this.hero, this.health, this.lives, this.ammo);
                     this.scene.remove(pickup.mesh);
                     this.world.removeBody(pickup.body);
                     this.ammoPickups.splice(index, 1);
                     return;
                 }
-    
+
                 if (this.isSinglePlayer) {
                     this.bots.forEach((bot) => {
                         const botDistance = bot.mesh.position.distanceTo(pickup.mesh.position);
@@ -1468,14 +1393,14 @@ class App {
                     });
                 }
             });
-    
+
             this.thunderBoosts.forEach((boost, index) => {
                 const distance = this.hero.position.distanceTo(boost.mesh.position);
                 if (distance < 3) {
                     this.scene.remove(boost.mesh);
                     this.world.removeBody(boost.body);
                     this.thunderBoosts.splice(index, 1);
-    
+
                     this.speedBoostActive = true;
                     if (this.boostTimeout) clearTimeout(this.boostTimeout);
                     this.boostTimeout = setTimeout(() => {
@@ -1485,7 +1410,7 @@ class App {
                     this.speedBoostCounter.textContent = `Speed Boost: Active (${this.boostDuration / 1000}s)`;
                 }
             });
-    
+
             this.sparks.forEach((spark, index) => {
                 spark.lifetime -= 16.67;
                 if (spark.lifetime <= 0) {
@@ -1495,22 +1420,22 @@ class App {
                     spark.mesh.scale.multiplyScalar(0.95);
                 }
             });
-    
+
             if (this.isSinglePlayer) {
                 this.updateBotBehavior();
             }
-    
+
             this.renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
             this.renderer.setScissorTest(false);
             this.renderer.render(this.scene, this.camera);
-    
+
             const miniMapSize = 150;
             this.renderer.setViewport(window.innerWidth - miniMapSize - 10, 10, miniMapSize, miniMapSize);
             this.renderer.setScissor(window.innerWidth - miniMapSize - 10, 10, miniMapSize, miniMapSize);
             this.renderer.setScissorTest(true);
             this.renderer.setClearColor(0x000000, 0.5);
             this.renderer.clear();
-    
+
             this.scene.traverse((object) => {
                 if (object === this.hero || 
                     (object.userData && this.bots.has(object.userData.id)) || 
@@ -1521,11 +1446,11 @@ class App {
                     object.visible = false;
                 }
             });
-    
+
             if (this.miniMapCamera && this.scene) {
                 this.renderer.render(this.scene, this.miniMapCamera);
             }
-    
+
             this.renderer.setScissorTest(false);
             this.scene.traverse((object) => object.visible = true);
         }
