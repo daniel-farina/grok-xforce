@@ -78,6 +78,8 @@ class App {
     private ammoWarning!: HTMLElement;
     private pauseMenu!: HTMLElement;
     private lobby!: HTMLElement;
+    private hud!: HTMLElement;
+
     private lobbyTitle!: HTMLElement;
     private resumeButton!: HTMLElement;
     private joinButton!: HTMLElement;
@@ -120,68 +122,53 @@ class App {
     private cameraMode: 'pov' | 'top' | 'front' | 'map' = 'pov';
     private cameraModes: ('pov' | 'top' | 'front' | 'map')[] = ['pov', 'top', 'front', 'map'];
     private cameraModeIndex: number = 0;
+    private characterPreviewScene!: THREE.Scene;
+    private characterPreviewCamera!: THREE.PerspectiveCamera;
+    private characterPreviewRenderer!: THREE.WebGLRenderer;
+    private characterPreviewModel!: THREE.Object3D | null;
+    private previewAnimationFrameId: number | null = null;
+    private characters: string[] = [
+        "character-male-a.glb", "character-male-b.glb", "character-male-c.glb",
+        "character-male-d.glb", "character-male-e.glb", "character-male-f.glb",
+        "character-female-a.glb", "character-female-b.glb", "character-female-c.glb",
+        "character-female-d.glb", "character-female-e.glb", "character-female-f.glb"
+    ];
+    private currentCharacterIndex: number = 0;
+    private currentScreen: 'username' | 'character' | 'difficulty' = 'username';
+
 
     constructor() {
         this.initialize();
+        
         this.miniMapCamera = new THREE.OrthographicCamera(-400, 400, 400, -400, 1, 1000);
         this.miniMapCamera.position.set(0, 200, 0);
         this.miniMapCamera.lookAt(0, 0, 0);
         this.levelCounter = document.getElementById("levelCounter") as HTMLElement;
-        this.levelCounter.textContent = `Level: ${this.level}`;
+        if (this.levelCounter) this.levelCounter.textContent = `Level: ${this.level}`;
     }
 
     private initialize(): void {
-        const getCanvas = (): HTMLCanvasElement => {
-            const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
-            if (!canvas) throw new Error("Canvas element not found");
-            return canvas;
-        };
-    
         const init = () => {
-            this.canvas = getCanvas();
+            this.canvas = this.getCanvas();
             this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas });
             this.renderer.setSize(window.innerWidth, window.innerHeight);
             this.world.gravity.set(0, -20, 0);
-    
-            // Assign HUD elements with null checks
-            this.ammoCounter = document.getElementById("ammoCounter") as HTMLElement;
-            this.speedBoostCounter = document.getElementById("speedBoostCounter") as HTMLElement;
-            this.livesCounter = document.getElementById("livesCounter") as HTMLElement;
-            this.healthCounter = document.getElementById("healthCounter") as HTMLElement;
-            this.levelCounter = document.getElementById("levelCounter") as HTMLElement;
-            this.ammoWarning = document.getElementById("ammoWarning") as HTMLElement;
-            this.pauseMenu = document.getElementById("pauseMenu") as HTMLElement;
-            this.lobby = document.getElementById("lobby") as HTMLElement;
-            this.lobbyTitle = document.getElementById("lobbyTitle") as HTMLElement;
-            this.resumeButton = document.getElementById("resumeButton") as HTMLElement;
-            this.joinButton = document.getElementById("joinButton") as HTMLElement;
-            this.singlePlayerButton = document.getElementById("singlePlayerButton") as HTMLElement;
-            this.readyButton = document.getElementById("readyButton") as HTMLButtonElement;
-            this.usernameInput = document.getElementById("usernameInput") as HTMLInputElement;
-            this.lobbyStatus = document.getElementById("lobbyStatus") as HTMLElement;
-            this.countdown = document.getElementById("countdown") as HTMLElement;
-            this.characterSelection = document.getElementById("characterSelection") as HTMLElement;
-            this.characterPreview = document.getElementById("characterPreview") as HTMLElement;
-            this.characterOptions = document.getElementById("characterOptions") as HTMLElement;
-            this.difficultySelection = document.getElementById("difficultySelection") as HTMLElement;
-    
-            // Verify levelCounter exists
-            if (!this.levelCounter) {
-                console.error("Level counter element not found in DOM!");
-                this.levelCounter = document.createElement("div"); // Fallback
-                this.levelCounter.id = "levelCounter";
-                document.getElementById("hud")?.appendChild(this.levelCounter);
-            }
-            this.levelCounter.textContent = `Level: ${this.level}`;
-    
+
+            // Assign DOM elements with null checks
+            this.assignDomElements();
+
+            this.setupCharacterPreview();
             this.lobby.style.display = "block";
+
             this.setupSocketEvents();
-            this.setupInput();
-            this.setupCharacterSelection();
+            this.setupInput(); // Will handle arrow keys now
             this.handleResize();
             window.addEventListener('resize', () => this.handleResize());
+
+            // Load initial character
+            this.loadCharacterPreview(this.characters[this.currentCharacterIndex]);
         };
-    
+
         if (document.readyState === "complete" || document.readyState === "interactive") {
             init();
         } else {
@@ -189,16 +176,110 @@ class App {
         }
     }
 
+    private getCanvas(): HTMLCanvasElement {
+        const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
+        if (!canvas) throw new Error("Canvas element not found");
+        return canvas;
+    }
+
+    private assignDomElements(): void {
+        this.ammoCounter = document.getElementById("ammoCounter") as HTMLElement;
+        this.speedBoostCounter = document.getElementById("speedBoostCounter") as HTMLElement;
+        this.livesCounter = document.getElementById("livesCounter") as HTMLElement;
+        this.healthCounter = document.getElementById("healthCounter") as HTMLElement;
+        this.levelCounter = document.getElementById("levelCounter") as HTMLElement;
+        this.ammoWarning = document.getElementById("ammoWarning") as HTMLElement;
+        this.pauseMenu = document.getElementById("pauseMenu") as HTMLElement;
+        this.lobby = document.getElementById("lobby") as HTMLElement;
+        this.lobbyTitle = document.getElementById("lobbyTitle") as HTMLElement;
+        this.resumeButton = document.getElementById("resumeButton") as HTMLElement;
+        this.joinButton = document.getElementById("joinButton") as HTMLElement;
+        this.singlePlayerButton = document.getElementById("singlePlayerButton") as HTMLElement;
+        this.readyButton = document.getElementById("readyButton") as HTMLButtonElement;
+        this.usernameInput = document.getElementById("usernameInput") as HTMLInputElement;
+        this.lobbyStatus = document.getElementById("lobbyStatus") as HTMLElement;
+        this.countdown = document.getElementById("countdown") as HTMLElement;
+        this.characterSelection = document.getElementById("characterSelection") as HTMLElement;
+        this.characterPreview = document.getElementById("characterPreviewCanvas") as HTMLElement;
+        this.difficultySelection = document.getElementById("difficultySelection") as HTMLElement;
+         this.hud = document.getElementById("hud") as HTMLElement;
+    }
+
+    private setupCharacterPreview(): void {
+        this.characterPreviewScene = new THREE.Scene();
+        this.characterPreviewCamera = new THREE.PerspectiveCamera(75, 300 / 300, 0.1, 1000);
+        this.characterPreviewCamera.position.set(0, 2, 5);
+        this.characterPreviewCamera.lookAt(0, 1, 0);
+
+        this.characterPreviewRenderer = new THREE.WebGLRenderer({
+            canvas: document.getElementById("characterPreviewCanvas") as HTMLCanvasElement,
+            antialias: true,
+        });
+        this.characterPreviewRenderer.setSize(300, 300);
+        this.characterPreviewRenderer.setClearColor(0x333333, 1);
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        this.characterPreviewScene.add(ambientLight);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(5, 5, 5);
+        this.characterPreviewScene.add(directionalLight);
+    }
+
+    private loadCharacterPreview(modelPath: string): void {
+        const gltfLoader = new GLTFLoader();
+        if (this.characterPreviewModel) {
+            this.characterPreviewScene.remove(this.characterPreviewModel);
+        }
+        this.stopCharacterPreviewAnimation();
+
+        gltfLoader.load(`/assets/characters/${modelPath}`, (gltf) => {
+            this.characterPreviewModel = gltf.scene;
+            this.characterPreviewModel.scale.set(2.68, 2.68, 2.68); // Adjust scale as needed
+            this.characterPreviewModel.position.set(0, 0, 0);
+            this.characterPreviewScene.add(this.characterPreviewModel);
+            this.animateCharacterPreview();
+        }, undefined, (error) => {
+            console.error(`Error loading character model ${modelPath}:`, error);
+        });
+    }
+
+    private animateCharacterPreview(): void {
+        if (this.characterPreviewModel) {
+            this.characterPreviewModel.rotation.y += 0.02;
+            this.characterPreviewRenderer.render(this.characterPreviewScene, this.characterPreviewCamera);
+            this.previewAnimationFrameId = requestAnimationFrame(() => this.animateCharacterPreview());
+        }
+    }
+
+    private stopCharacterPreviewAnimation(): void {
+        if (this.previewAnimationFrameId !== null) {
+            cancelAnimationFrame(this.previewAnimationFrameId);
+            this.previewAnimationFrameId = null;
+        }
+    }
+
+
     private setupSocketEvents(): void {
-        this.joinButton.addEventListener("click", () => {
-            const username = this.usernameInput.value.trim();
-            if (username) {
-                this.playerName = username;
-                this.joinButton.style.display = "none";
-                this.singlePlayerButton.style.display = "none";
-                this.usernameInput.style.display = "none";
-                this.characterSelection.style.display = "block";
-                this.lobbyTitle.textContent = "Select Your Character";
+        this.joinButton.addEventListener("click", () => this.startLobby('multiplayer'));
+        this.singlePlayerButton.addEventListener("click", () => this.startLobby('singleplayer'));
+
+        this.readyButton.addEventListener("click", () => {
+            if (!this.isReady) {
+                if (this.isSinglePlayer) {
+                    this.roomId = "singleplayer_" + Date.now();
+                    const rng = seedrandom(this.roomId);
+                    Math.random = () => rng();
+                    this.lobby.style.display = "none";
+                    this.hud.style.display = "flex"; // Add this line here
+                    this.isReady = true;
+                    this.isPaused = true;
+                    this.createScene({ x: 0, y: 2.68, z: 0 }).then(() => {
+                        this.createBots();
+                        this.animate();
+                    });
+                } else {
+                    this.socket.emit("login", { name: this.playerName, avatar: this.selectedCharacter });
+                }
             }
         });
 
@@ -280,6 +361,7 @@ class App {
         });
 
         this.socket.on("gameStarted", () => {
+            this.hud.style.display = "flex";
             this.lobby.style.display = "none";
             this.isPaused = false;
         });
@@ -310,6 +392,21 @@ class App {
             alert(`Game Over! Winner: ${this.otherPlayers.get(winnerSocketId)?.nameTag.userData.name || "Unknown"}`);
             this.resetGameForNewRoom();
         });
+    }
+
+
+    private startLobby(mode: 'multiplayer' | 'singleplayer'): void {
+        const username = this.usernameInput.value.trim();
+        if (username) {
+            this.playerName = username;
+            this.isSinglePlayer = mode === 'singleplayer';
+            this.currentScreen = 'character';
+            this.joinButton.style.display = "none";
+            this.singlePlayerButton.style.display = "none";
+            this.usernameInput.style.display = "none";
+            this.characterSelection.style.display = "block";
+            this.lobbyTitle.textContent = "Select Your Character";
+        }
     }
 
     private processPlayersUpdate(players: { [socketId: string]: PlayerData }): void {
@@ -397,11 +494,12 @@ class App {
                 }
                 mesh.add(healthBar);
     
-                const ammoGeometry = new THREE.PlaneGeometry(2, 0.2);
-                const ammoMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff });
-                const ammoBar = new THREE.Mesh(ammoGeometry, ammoMaterial);
-                ammoBar.position.y = 2.73;
-                mesh.add(ammoBar);
+                const ammoTextGeometry = new THREE.PlaneGeometry(2, 0.5);
+                const ammoTextMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff, transparent: true });
+                const ammoText = new THREE.Mesh(ammoTextGeometry, ammoTextMaterial);
+                ammoText.position.y = 2.5;
+                ammoText.userData = { ammo: 50 };
+                mesh.add(ammoText);
     
                 if (!this.bots.has(botId)) {
                     this.bots.set(botId, {
@@ -410,7 +508,7 @@ class App {
                         body,
                         nameTag,
                         healthBar,
-                        ammoBar,
+                        ammoBar: ammoText,  // Update this type in the Bot interface too
                         difficulty,
                         shootTimer: Math.random() * 3000,
                         fleeTimer: Math.random() * 5000,
@@ -419,7 +517,6 @@ class App {
                         lives: 5,
                         hits: 0
                     });
-                    console.log(`Bot ${botId} added. Total bots: ${this.bots.size}`);
                 }
     
                 this.updateIndicators(mesh, 100, 5, 50);
@@ -543,14 +640,54 @@ class App {
             }
         }
 
-        const ammoBar = character.children.find(child => child instanceof THREE.Mesh && child.geometry instanceof THREE.PlaneGeometry) as THREE.Mesh;
-        if (ammoBar) {
-            const ammoPercentage = ammo / 50;
-            ammoBar.scale.x = Math.max(0, ammoPercentage);
-        }
+    // Update ammo text instead of bar
+    const ammoText = character.children.find(child => child instanceof THREE.Mesh && child.userData.ammo !== undefined) as THREE.Mesh;
+    if (ammoText) {
+        ammoText.userData.ammo = ammo;
+        // Note: Three.js doesn't have built-in text rendering, so we'll update the HUD instead
+        // The actual text display will be handled by the HTML ammoCounter element
+    }
     }
 
     private setupInput(): void {
+
+
+        document.addEventListener("keydown", (event) => {
+            if (this.currentScreen === 'character') {
+                switch (event.key) {
+                    case "ArrowLeft":
+                        this.currentCharacterIndex = (this.currentCharacterIndex - 1 + this.characters.length) % this.characters.length;
+                        this.loadCharacterPreview(this.characters[this.currentCharacterIndex]);
+                        break;
+                    case "ArrowRight":
+                        this.currentCharacterIndex = (this.currentCharacterIndex + 1) % this.characters.length;
+                        this.loadCharacterPreview(this.characters[this.currentCharacterIndex]);
+                        break;
+                    case "Enter":
+                        this.selectedCharacter = this.characters[this.currentCharacterIndex];
+                        this.currentScreen = 'difficulty';
+                        this.characterSelection.style.display = "none";
+                        this.difficultySelection.style.display = "block";
+                        this.lobbyTitle.textContent = "Select Difficulty";
+                        break;
+                }
+            } else if (this.currentScreen === 'difficulty' && event.key === "Enter") {
+                this.readyButton.click();
+            }
+        });
+    
+        const difficultyButtons = Array.from(this.difficultySelection.getElementsByTagName("button"));
+        difficultyButtons.forEach(button => {
+            if (button.id !== "readyButton") {
+                button.addEventListener("click", () => {
+                    difficultyButtons.forEach(btn => btn.classList.remove("selected"));
+                    button.classList.add("selected");
+                    this.difficulty = button.dataset.difficulty as 'easy' | 'medium' | 'hard';
+                    this.readyButton.style.display = "block";
+                });
+            }
+        });
+
         this.canvas.addEventListener("click", () => {
             if (!this.isPaused && this.lobby.style.display === "none" && !document.pointerLockElement) {
                 this.canvas.requestPointerLock();
@@ -624,24 +761,6 @@ class App {
         });
     }
 
-    private setupCharacterSelection(): void {
-        const characterButtons = Array.from(this.characterOptions.getElementsByTagName("button"));
-        for (let button of characterButtons) {
-            button.addEventListener("click", () => {
-                this.selectedCharacter = button.dataset.model!;
-                this.characterPreview.style.backgroundImage = `url(/assets/characters/${this.selectedCharacter.replace('.glb', '.png')})`;
-                this.readyButton.style.display = "block";
-            });
-        }
-
-        const difficultyButtons = Array.from(this.difficultySelection.getElementsByTagName("button"));
-        for (let button of difficultyButtons) {
-            button.addEventListener("click", () => {
-                this.difficulty = button.dataset.difficulty as 'easy' | 'medium' | 'hard';
-                this.readyButton.style.display = "block";
-            });
-        }
-    }
 
     private updateAmmoWarning(): void {
         if (this.ammo <= 0) {
@@ -657,12 +776,16 @@ class App {
         this.renderer.setSize(width, height);
         this.camera.aspect = width / height;
         this.camera.updateProjectionMatrix();
-        const miniMapSize = 150;
-        this.miniMapCamera.left = -400;
-        this.miniMapCamera.right = 400;
-        this.miniMapCamera.top = 400;
-        this.miniMapCamera.bottom = -400;
-        this.miniMapCamera.updateProjectionMatrix();
+        if (this.miniMapCamera) {
+            this.miniMapCamera.left = -400;
+            this.miniMapCamera.right = 400;
+            this.miniMapCamera.top = 400;
+            this.miniMapCamera.bottom = -400;
+            this.miniMapCamera.updateProjectionMatrix();
+        }
+        if (this.characterPreviewRenderer) {
+            this.characterPreviewRenderer.setSize(300, 300);
+        }
     }
 
     private resetGameForNewRoom(): void {
@@ -673,6 +796,7 @@ class App {
         this.level = 1;
         this.pendingPlayersUpdates = [];
         this.loadingPlayers.clear();
+        this.hud.style.display = "none";
         this.otherPlayers.forEach((playerObj) => this.scene.remove(playerObj.mesh));
         this.otherPlayers.clear();
         this.bots.forEach((bot) => {
@@ -772,11 +896,13 @@ class App {
         }
         this.hero.add(healthBar);
     
-        const ammoBarGeometry = new THREE.PlaneGeometry(2, 0.2);
-        const ammoBarMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff });
-        const ammoBar = new THREE.Mesh(ammoBarGeometry, ammoBarMaterial);
-        ammoBar.position.y = 2.73;
-        this.hero.add(ammoBar);
+        // Replace ammo bar with text
+        const ammoTextGeometry = new THREE.PlaneGeometry(2, 0.5);
+        const ammoTextMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff, transparent: true });
+        const ammoText = new THREE.Mesh(ammoTextGeometry, ammoTextMaterial);
+        ammoText.position.y = 2.5;  // Position below name tag
+        ammoText.userData = { ammo: this.ammo };
+        this.hero.add(ammoText);
     
         // Hero physics with cylinder shape and material
         const heroMaterial = new CANNON.Material({ friction: 1.0, restitution: 0 }); // Increased friction
@@ -1094,21 +1220,22 @@ class App {
                     const dotGeometry = new THREE.CircleGeometry(0.2, 16);
                     const dotMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
                     const dot = new THREE.Mesh(dotGeometry, dotMaterial);
-                    dot.position.set((i - 2) * 0.5, 2.33, 0); // Fixed 'j' to 'i'
+                    dot.position.set((i - 2) * 0.5, 2.33, 0);
                     healthBar.add(dot);
                 }
                 mesh.add(healthBar);
     
-                const ammoGeometry = new THREE.PlaneGeometry(2, 0.2);
-                const ammoMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff });
-                const ammoBar = new THREE.Mesh(ammoGeometry, ammoMaterial);
-                ammoBar.position.y = 2.73;
-                mesh.add(ammoBar);
+                // Replace ammo bar with text
+                const ammoTextGeometry = new THREE.PlaneGeometry(2, 0.5);
+                const ammoTextMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff, transparent: true });
+                const ammoText = new THREE.Mesh(ammoTextGeometry, ammoTextMaterial);
+                ammoText.position.y = 2.5;
+                ammoText.userData = { ammo: player.ammo || 50 };
+                mesh.add(ammoText);
     
-                this.otherPlayers.set(socketId, { mesh, nameTag, healthBar, ammoBar });
+                this.otherPlayers.set(socketId, { mesh, nameTag, healthBar, ammoBar: ammoText });
                 this.loadingPlayers.delete(socketId);
     
-                // Initial update of indicators
                 this.updateIndicators(mesh, player.health, player.lives, player.ammo || 50);
             });
         } else {
