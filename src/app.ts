@@ -97,6 +97,7 @@ class App {
     constructor() {
         this.initialize();
     }
+    
 
     private initialize(): void {
         const getCanvas = (): HTMLCanvasElement => {
@@ -454,13 +455,13 @@ class App {
         while (this.pendingPlayersUpdates.length > 0) {
             this.processPlayersUpdate(this.pendingPlayersUpdates.shift()!);
         }
-
+    
         const textureLoader = new THREE.TextureLoader();
         const groundTexture = textureLoader.load('/assets/textures/ground.jpg');
         groundTexture.wrapS = groundTexture.wrapT = THREE.RepeatWrapping;
-        groundTexture.repeat.set(50, 50);
+        groundTexture.repeat.set(40, 40); // Adjusted for larger map
         const groundMaterial = new THREE.MeshStandardMaterial({ map: groundTexture });
-        const groundGeometry = new THREE.PlaneGeometry(1000, 1000);
+        const groundGeometry = new THREE.PlaneGeometry(800, 800); // Increased from 400x400
         const ground = new THREE.Mesh(groundGeometry, groundMaterial);
         ground.rotation.x = -Math.PI / 2;
         ground.position.y = -1;
@@ -470,68 +471,127 @@ class App {
         groundBody.position.set(0, -1, 0);
         groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
         this.world.addBody(groundBody);
-
-        const streetWidth = 20;
-        const sidewalkWidth = 5;
+    
+        const streetWidth = 10;
+        const sidewalkWidth = 3;
+        const streetSpacing = 40;
         const streetMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
         const sidewalkMaterial = new THREE.MeshStandardMaterial({ color: 0x888888 });
-        const streetGeometryX = new THREE.PlaneGeometry(1000, streetWidth);
-        const streetGeometryZ = new THREE.PlaneGeometry(streetWidth, 1000);
-        const sidewalkGeometryX = new THREE.PlaneGeometry(1000, sidewalkWidth);
-        const sidewalkGeometryZ = new THREE.PlaneGeometry(sidewalkWidth, 1000);
-
-        for (let x = -450; x <= 450; x += 90) {
-            const streetX = new THREE.Mesh(streetGeometryX, streetMaterial);
+    
+        // X-axis streets
+        for (let x = -360; x <= 360; x += streetSpacing) {
+            if (Math.abs(x) < 80) continue;
+            const streetX = new THREE.Mesh(
+                new THREE.PlaneGeometry(800, streetWidth),
+                streetMaterial
+            );
             streetX.rotation.x = -Math.PI / 2;
             streetX.position.set(x, -0.95, 0);
             this.scene.add(streetX);
-
-            const sidewalkX1 = new THREE.Mesh(sidewalkGeometryX, sidewalkMaterial);
+    
+            const sidewalkX1 = new THREE.Mesh(
+                new THREE.PlaneGeometry(800, sidewalkWidth),
+                sidewalkMaterial
+            );
             sidewalkX1.rotation.x = -Math.PI / 2;
-            sidewalkX1.position.set(x - streetWidth / 2 - sidewalkWidth / 2, -0.9, 0);
+            sidewalkX1.position.set(x - streetWidth/2 - sidewalkWidth/2, -0.9, 0);
             this.scene.add(sidewalkX1);
-
-            const sidewalkX2 = new THREE.Mesh(sidewalkGeometryX, sidewalkMaterial);
+    
+            const sidewalkX2 = new THREE.Mesh(
+                new THREE.PlaneGeometry(800, sidewalkWidth),
+                sidewalkMaterial
+            );
             sidewalkX2.rotation.x = -Math.PI / 2;
-            sidewalkX2.position.set(x + streetWidth / 2 + sidewalkWidth / 2, -0.9, 0);
+            sidewalkX2.position.set(x + streetWidth/2 + sidewalkWidth/2, -0.9, 0);
             this.scene.add(sidewalkX2);
         }
-
-        for (let z = -450; z <= 450; z += 90) {
-            const streetZ = new THREE.Mesh(streetGeometryZ, streetMaterial);
+    
+        // Z-axis streets
+        for (let z = -360; z <= 360; z += streetSpacing) {
+            if (Math.abs(z) < 80) continue;
+            const streetZ = new THREE.Mesh(
+                new THREE.PlaneGeometry(streetWidth, 800),
+                streetMaterial
+            );
             streetZ.rotation.x = -Math.PI / 2;
             streetZ.position.set(0, -0.95, z);
             this.scene.add(streetZ);
-
-            const sidewalkZ1 = new THREE.Mesh(sidewalkGeometryZ, sidewalkMaterial);
+    
+            const sidewalkZ1 = new THREE.Mesh(
+                new THREE.PlaneGeometry(streetWidth, 800),
+                sidewalkMaterial
+            );
             sidewalkZ1.rotation.x = -Math.PI / 2;
-            sidewalkZ1.position.set(0, -0.9, z - streetWidth / 2 - sidewalkWidth / 2);
+            sidewalkZ1.position.set(0, -0.9, z - streetWidth/2 - sidewalkWidth/2);
             this.scene.add(sidewalkZ1);
-
-            const sidewalkZ2 = new THREE.Mesh(sidewalkGeometryZ, sidewalkMaterial);
+    
+            const sidewalkZ2 = new THREE.Mesh(
+                new THREE.PlaneGeometry(streetWidth, 800),
+                sidewalkMaterial
+            );
             sidewalkZ2.rotation.x = -Math.PI / 2;
-            sidewalkZ2.position.set(0, -0.9, z + streetWidth / 2 + sidewalkWidth / 2);
+            sidewalkZ2.position.set(0, -0.9, z + streetWidth/2 + sidewalkWidth/2);
             this.scene.add(sidewalkZ2);
         }
-
-        const elevatorGeometry = new THREE.BoxGeometry(60, 1, 60);
+    
+        // Circular street around lake
+        const lakeRingRadius = 80;
+        const ringSegments = 32;
+        const ringGeometry = new THREE.RingGeometry(lakeRingRadius - streetWidth/2, lakeRingRadius + streetWidth/2, ringSegments);
+        const ringStreet = new THREE.Mesh(ringGeometry, streetMaterial);
+        ringStreet.rotation.x = -Math.PI / 2;
+        ringStreet.position.set(0, -0.95, 0);
+        this.scene.add(ringStreet);
+    
+        const sidewalkInner = new THREE.Mesh(
+            new THREE.RingGeometry(lakeRingRadius - streetWidth/2 - sidewalkWidth, lakeRingRadius - streetWidth/2, ringSegments),
+            sidewalkMaterial
+        );
+        sidewalkInner.rotation.x = -Math.PI / 2;
+        sidewalkInner.position.set(0, -0.9, 0);
+        this.scene.add(sidewalkInner);
+    
+        const sidewalkOuter = new THREE.Mesh(
+            new THREE.RingGeometry(lakeRingRadius + streetWidth/2, lakeRingRadius + streetWidth/2 + sidewalkWidth, ringSegments),
+            sidewalkMaterial
+        );
+        sidewalkOuter.rotation.x = -Math.PI / 2;
+        sidewalkOuter.position.set(0, -0.9, 0);
+        this.scene.add(sidewalkOuter);
+    
+        // Lake
+        const lakeGeometry = new THREE.CircleGeometry(60, 32);
+        const lakeMaterial = new THREE.MeshStandardMaterial({ color: 0x0066cc, side: THREE.DoubleSide });
+        const lake = new THREE.Mesh(lakeGeometry, lakeMaterial);
+        lake.rotation.x = -Math.PI / 2;
+        lake.position.set(0, -0.98, 0);
+        this.scene.add(lake);
+        const lakeBody = new CANNON.Body({ mass: 0 });
+        lakeBody.addShape(new CANNON.Cylinder(60, 60, 0.1, 32));
+        lakeBody.position.set(0, -1, 0);
+        this.world.addBody(lakeBody);
+    
+        // Elevator
+        const elevatorGeometry = new THREE.BoxGeometry(30, 1, 30);
         const elevatorMaterial = new THREE.MeshStandardMaterial({ color: 0x666666 });
         const elevatorMesh = new THREE.Mesh(elevatorGeometry, elevatorMaterial);
-        elevatorMesh.position.set(0, -0.25, 0);
+        elevatorMesh.position.set(100, -0.25, 100);
         this.scene.add(elevatorMesh);
-
+    
         const elevatorBody = new CANNON.Body({ mass: 0 });
-        elevatorBody.addShape(new CANNON.Box(new CANNON.Vec3(30, 0.5, 30)));
-        elevatorBody.position.set(0, -0.25, 0);
+        elevatorBody.addShape(new CANNON.Box(new CANNON.Vec3(15, 0.5, 15)));
+        elevatorBody.position.set(100, -0.25, 100);
         this.world.addBody(elevatorBody);
         this.elevator = { mesh: elevatorMesh, body: elevatorBody };
-
-        const skyGeometry = new THREE.SphereGeometry(1000, 32, 32);
+    
+        // Sky and stars
+        const skyGeometry = new THREE.SphereGeometry(1000, 32, 32); // Increased for larger map
         const skyMaterial = new THREE.MeshBasicMaterial({ color: 0x001133, side: THREE.BackSide });
         const sky = new THREE.Mesh(skyGeometry, skyMaterial);
         this.scene.add(sky);
+        
         const starGeometry = new THREE.BufferGeometry();
-        const starCount = 2000;
+        const starCount = 2000; // Increased for larger map
         const positions = new Float32Array(starCount * 3);
         for (let i = 0; i < starCount; i++) {
             positions[i * 3] = (Math.random() - 0.5) * 2000;
@@ -539,14 +599,15 @@ class App {
             positions[i * 3 + 2] = (Math.random() - 0.5) * 2000;
         }
         starGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-        const starMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 2, sizeAttenuation: true });
+        const starMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 1, sizeAttenuation: true });
         const stars = new THREE.Points(starGeometry, starMaterial);
         this.scene.add(stars);
-
+    
+        // Lighting
         const ambientLight = new THREE.AmbientLight(0x404060, 0.8);
         this.scene.add(ambientLight);
         const light1 = new THREE.DirectionalLight(0x8080ff, 0.5);
-        light1.position.set(100, 100, 100);
+        light1.position.set(100, 100, 100); // Adjusted for larger map
         light1.castShadow = true;
         this.scene.add(light1);
         const light2 = new THREE.DirectionalLight(0x8080ff, 0.3);
@@ -555,7 +616,7 @@ class App {
         const light3 = new THREE.DirectionalLight(0x8080ff, 0.3);
         light3.position.set(0, 90, -150);
         this.scene.add(light3);
-
+    
         const loadModel = (path: string, position: THREE.Vector3, scale: number, rotationY = 0): Promise<THREE.Object3D> => {
             return new Promise((resolve) => {
                 gltfLoader.load(path, (gltf) => {
@@ -568,171 +629,291 @@ class App {
                     model.position.copy(position);
                     model.position.y = -1;
                     this.scene.add(model);
-
+    
                     const body = new CANNON.Body({ mass: 0 });
                     body.addShape(new CANNON.Box(new CANNON.Vec3(size.x / 2, size.y / 2, size.z / 2)));
                     body.position.copy(model.position);
                     body.quaternion.copy(model.quaternion);
                     this.world.addBody(body);
                     this.buildings.push({ mesh: model, body });
-
+    
                     resolve(model);
                 });
             });
         };
-
+    
         const skyscrapers = ["skyscraperA.glb", "skyscraperB.glb", "skyscraperC.glb", "skyscraperD.glb", "skyscraperE.glb", "skyscraperF.glb"];
         const largeBuildings = ["large_buildingA.glb", "large_buildingB.glb", "large_buildingC.glb", "large_buildingD.glb", "large_buildingE.glb", "large_buildingF.glb", "large_buildingG.glb"];
         const lowBuildings = ["low_buildingA.glb", "low_buildingB.glb", "low_buildingC.glb", "low_buildingD.glb", "low_buildingE.glb", "low_buildingF.glb", "low_buildingG.glb", "low_buildingH.glb", "low_buildingI.glb", "low_buildingJ.glb", "low_buildingK.glb", "low_buildingL.glb", "low_buildingM.glb", "low_buildingN.glb", "low_wideA.glb", "low_wideB.glb"];
-        const smallBuildings = ["small_buildingA.glb", "small_buildingB.glb", "small_buildingC.glb", "small_buildingD.glb", "small_buildingE.glb", "small_buildingF.glb"];
         const details = ["detail_awning.glb", "detail_awningWide.glb", "detail_overhang.glb", "detail_overhangWide.glb", "detail_umbrella.glb", "detail_umbrellaDetailed.glb"];
         const cars = ["ambulance.glb", "box.glb", "cone-flat.glb", "cone.glb", "delivery-flat.glb", "delivery.glb", "firetruck.glb", "garbage-truck.glb", "hatchback-sports.glb", "police.glb", "race-future.glb", "race.glb", "sedan-sports.glb", "sedan.glb", "suv-luxury.glb", "suv.glb", "taxi.glb", "tractor-police.glb", "tractor-shovel.glb", "tractor.glb", "truck-flat.glb", "truck.glb", "van.glb"];
-
-        const downtownCenter = new THREE.Vector3(0, 0, 0);
-        for (let i = 0; i < 8; i++) {
+    
+        const downtownRadius = 100;
+        const midtownRadius = 600; // Increased from 300 (10x spread: 140 * 10 = 1400, constrained to 600)
+    
+        // Downtown - Skyscrapers
+        for (let i = 0; i < 12; i++) {
             const model = skyscrapers[Math.floor(Math.random() * skyscrapers.length)];
-            const angle = (i / 15) * Math.PI * 2;
-            const radius = 100 + Math.random() * 50;
-            const x = Math.round((downtownCenter.x + Math.cos(angle) * radius) / 90) * 90 + (streetWidth + sidewalkWidth);
-            const z = Math.round((downtownCenter.z + Math.sin(angle) * radius) / 90) * 90 + (streetWidth + sidewalkWidth);
-            const rotationY = Math.random() * Math.PI * 2;
-            const skyscraper = await loadModel(`/assets/models/${model}`, new THREE.Vector3(x, 0, z), 50, rotationY);
-
+            const angle = (i / 12) * Math.PI * 2;
+            const radius = 70 + Math.random() * 30;
+            const x = Math.cos(angle) * radius;
+            const z = Math.sin(angle) * radius;
+            const snappedX = Math.round(x / streetSpacing) * streetSpacing + (streetWidth + sidewalkWidth);
+            const snappedZ = Math.round(z / streetSpacing) * streetSpacing + (streetWidth + sidewalkWidth);
+            
+            const skyscraper = await loadModel(
+                `/assets/models/${model}`,
+                new THREE.Vector3(snappedX, 0, snappedZ),
+                30,
+                Math.random() * Math.PI * 2
+            );
+    
             if (i === 0) {
                 const videoTexture = new THREE.VideoTexture(video);
                 videoTexture.minFilter = THREE.LinearFilter;
                 videoTexture.magFilter = THREE.LinearFilter;
                 const screenMaterial = new THREE.MeshBasicMaterial({ map: videoTexture });
-                const screenGeometry = new THREE.PlaneGeometry(20, 10);
+                const screenGeometry = new THREE.PlaneGeometry(10, 5);
                 const screen = new THREE.Mesh(screenGeometry, screenMaterial);
-                screen.position.set(x, 25, z + 10);
-                screen.rotation.y = rotationY;
+                screen.position.set(snappedX, 15, snappedZ + 5);
+                screen.rotation.y = Math.random() * Math.PI * 2;
                 this.scene.add(screen);
             }
         }
-
-        for (let x = -450; x <= 450; x += 90) {
-            for (let z = -450; z <= 450; z += 90) {
-                if (Math.abs(x - downtownCenter.x) > 100 || Math.abs(z - downtownCenter.z) > 100) {
-                    const type = Math.random() > 0.5 ? largeBuildings : lowBuildings;
-                    const model = type[Math.floor(Math.random() * type.length)];
-                    const offsetX = streetWidth / 2 + sidewalkWidth + 5;
-                    const offsetZ = streetWidth / 2 + sidewalkWidth + 5;
-                    const rotationY = Math.round(Math.random() * 4) * (Math.PI / 2);
-                    await loadModel(`/assets/models/${model}`, new THREE.Vector3(x + offsetX, 0, z + offsetZ), 25, rotationY);
-                }
+    
+        // Midtown - Large buildings (10x more spread)
+        for (let i = 0; i < 8; i++) { // Reduced from 10 for extreme spacing
+            const model = largeBuildings[Math.floor(Math.random() * largeBuildings.length)];
+            const angle = Math.random() * Math.PI * 2;
+            const radius = 110 + Math.random() * 490; // 110-600 units (10x wider: 70 * 10 = 700, adjusted to 600)
+            const x = Math.cos(angle) * radius;
+            const z = Math.sin(angle) * radius;
+            const snappedX = Math.round(x / streetSpacing) * streetSpacing + (streetWidth + sidewalkWidth);
+            const snappedZ = Math.round(z / streetSpacing) * streetSpacing + (streetWidth + sidewalkWidth);
+            
+            await loadModel(
+                `/assets/models/${model}`,
+                new THREE.Vector3(snappedX, 0, snappedZ),
+                15,
+                Math.round(Math.random() * 4) * (Math.PI / 2)
+            );
+        }
+    
+        // Outskirts - Smaller buildings
+        for (let i = 0; i < 25; i++) {
+            const model = lowBuildings[Math.floor(Math.random() * lowBuildings.length)];
+            const angle = Math.random() * Math.PI * 2;
+            const radius = midtownRadius + Math.random() * (360 - midtownRadius);
+            const x = Math.cos(angle) * radius;
+            const z = Math.sin(angle) * radius;
+            const snappedX = Math.round(x / streetSpacing) * streetSpacing + (streetWidth + sidewalkWidth);
+            const snappedZ = Math.round(z / streetSpacing) * streetSpacing + (streetWidth + sidewalkWidth);
+            
+            await loadModel(
+                `/assets/models/${model}`,
+                new THREE.Vector3(snappedX, 0, snappedZ),
+                10,
+                Math.random() * Math.PI * 2
+            );
+        }
+    
+        // Small towns outside city
+        const townCenters = [
+            { x: -300, z: -300 }, { x: 300, z: -300 },
+            { x: -300, z: 300 }, { x: 300, z: 300 }
+        ];
+        for (const center of townCenters) {
+            for (let i = 0; i < 5; i++) {
+                const model = lowBuildings[Math.floor(Math.random() * lowBuildings.length)];
+                const angle = Math.random() * Math.PI * 2;
+                const radius = Math.random() * 40;
+                const x = center.x + Math.cos(angle) * radius;
+                const z = center.z + Math.sin(angle) * radius;
+                await loadModel(
+                    `/assets/models/${model}`,
+                    new THREE.Vector3(x, 0, z),
+                    8, // Slightly smaller than outskirts
+                    Math.random() * Math.PI * 2
+                );
             }
         }
-
-        for (let i = 0; i < 30; i++) {
-            const model = smallBuildings[Math.floor(Math.random() * smallBuildings.length)];
-            const x = Math.round((Math.random() * 900 - 450) / 90) * 90 + (streetWidth + sidewalkWidth);
-            const z = Math.round((Math.random() * 900 - 450) / 90) * 90 + (streetWidth + sidewalkWidth);
-            if (Math.abs(x) > 300 || Math.abs(z) > 300) {
-                const rotationY = Math.random() * Math.PI * 2;
-                await loadModel(`/assets/models/${model}`, new THREE.Vector3(x, 0, z), 15, rotationY);
-            }
-        }
-
-        for (let i = 0; i < 50; i++) {
-            const model = details[Math.floor(Math.random() * details.length)];
-            const x = Math.round((Math.random() * 900 - 450) / 90) * 90 + (streetWidth / 2 + sidewalkWidth / 2);
-            const z = Math.round((Math.random() * 900 - 450) / 90) * 90 + (streetWidth / 2 + sidewalkWidth / 2);
-            const rotationY = Math.random() * Math.PI * 2;
-            await loadModel(`/assets/models/${model}`, new THREE.Vector3(x, 0, z), 5, rotationY);
-        }
-
+    
         const treeMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22 });
-        for (let i = 0; i < 50; i++) {
-            const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 5), treeMaterial);
-            const foliage = new THREE.Mesh(new THREE.SphereGeometry(3, 16, 16), treeMaterial);
-            const x = Math.round((Math.random() * 900 - 450) / 90) * 90 + (streetWidth / 2 + sidewalkWidth / 2);
-            const z = Math.round((Math.random() * 900 - 450) / 90) * 90 + (streetWidth / 2 + sidewalkWidth / 2);
-            trunk.position.set(x, 1.5, z);
-            foliage.position.copy(trunk.position);
-            foliage.position.y += 4;
+        const lightMaterial = new THREE.MeshStandardMaterial({ color: 0xaaaaaa });
+    
+        // Trees around lake
+        for (let i = 0; i < 40; i++) { // Increased from 30
+            const trunk = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.3, 0.3, 3),
+                treeMaterial
+            );
+            const foliage = new THREE.Mesh(
+                new THREE.SphereGeometry(2, 12, 12),
+                treeMaterial
+            );
+            const angle = (i / 40) * Math.PI * 2;
+            const radius = 65 + Math.random() * 5;
+            const x = Math.cos(angle) * radius;
+            const z = Math.sin(angle) * radius;
+            trunk.position.set(x, 1, z);
+            foliage.position.set(x, 2.5, z);
             this.scene.add(trunk, foliage);
         }
-
-        const lightMaterial = new THREE.MeshStandardMaterial({ color: 0xaaaaaa });
-        const lightPositions = [];
-        for (let i = 0; i < 10; i++) {
-            const x = Math.round((Math.random() * 900 - 450) / 90) * 90 + (streetWidth / 2 + sidewalkWidth / 2);
-            const z = Math.round((Math.random() * 900 - 450) / 90) * 90 + (streetWidth / 2 + sidewalkWidth / 2);
-            lightPositions.push({ x, z });
+    
+        // Additional scattered trees (more)
+        for (let i = 0; i < 100; i++) { // Increased from 50
+            const trunk = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.3, 0.3, 3),
+                treeMaterial
+            );
+            const foliage = new THREE.Mesh(
+                new THREE.SphereGeometry(2, 12, 12),
+                treeMaterial
+            );
+            const x = Math.round((Math.random() * 720 - 360) / streetSpacing) * streetSpacing + (streetWidth/2 + sidewalkWidth/2);
+            const z = Math.round((Math.random() * 720 - 360) / streetSpacing) * streetSpacing + (streetWidth/2 + sidewalkWidth/2);
+            if (Math.sqrt(x*x + z*z) > 80) {
+                trunk.position.set(x, 1, z);
+                foliage.position.set(x, 2.5, z);
+                this.scene.add(trunk, foliage);
+            }
         }
-        lightPositions.forEach(({ x, z }) => {
-            const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 10), lightMaterial);
-            const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.5, 16, 16), new THREE.MeshStandardMaterial({ color: 0xffff99, emissive: 0xffff99 }));
-            pole.position.set(x, 4, z);
-            lamp.position.copy(pole.position);
-            lamp.position.y += 5;
-            this.scene.add(pole, lamp);
-            const pointLight = new THREE.PointLight(0xffff99, 1, 50);
-            pointLight.position.copy(lamp.position);
-            this.scene.add(pointLight);
-        });
-
+    
+        // Street lights
         for (let i = 0; i < 20; i++) {
+            const pole = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.15, 0.15, 6),
+                lightMaterial
+            );
+            const lamp = new THREE.Mesh(
+                new THREE.SphereGeometry(0.3, 12, 12),
+                new THREE.MeshStandardMaterial({ color: 0xffff99, emissive: 0xffff99 })
+            );
+            const x = Math.round((Math.random() * 720 - 360) / streetSpacing) * streetSpacing + (streetWidth/2 + sidewalkWidth/2);
+            const z = Math.round((Math.random() * 720 - 360) / streetSpacing) * streetSpacing + (streetWidth/2 + sidewalkWidth/2);
+            if (Math.sqrt(x*x + z*z) > 80) {
+                pole.position.set(x, 2.5, z);
+                lamp.position.set(x, 3, z);
+                this.scene.add(pole, lamp);
+                const pointLight = new THREE.PointLight(0xffff99, 0.8, 30);
+                pointLight.position.copy(lamp.position);
+                this.scene.add(pointLight);
+            }
+        }
+    
+        // Urban details
+        for (let i = 0; i < 80; i++) {
+            const model = details[Math.floor(Math.random() * details.length)];
+            const x = Math.round((Math.random() * 720 - 360) / streetSpacing) * streetSpacing + (streetWidth/2 + sidewalkWidth/2);
+            const z = Math.round((Math.random() * 720 - 360) / streetSpacing) * streetSpacing + (streetWidth/2 + sidewalkWidth/2);
+            if (Math.sqrt(x*x + z*z) > 80) {
+                await loadModel(
+                    `/assets/models/${model}`,
+                    new THREE.Vector3(x, 0, z),
+                    3,
+                    Math.random() * Math.PI * 2
+                );
+            }
+        }
+    
+        // Cars along streets
+        for (let i = 0; i < 15; i++) {
             const carModel = cars[Math.floor(Math.random() * cars.length)];
-            const x = Math.round((Math.random() * 900 - 450) / 90) * 90;
-            const z = Math.round((Math.random() * 900 - 450) / 90) * 90;
-            const rotationY = Math.round(Math.random() * 4) * (Math.PI / 2);
-            await loadModel(`/assets/cars/${carModel}`, new THREE.Vector3(x, 0, z), 1, rotationY)
-                .then((car) => {
+            const isXStreet = Math.random() > 0.5;
+            let x, z, rotationY;
+            if (isXStreet) {
+                x = Math.round((Math.random() * 720 - 360) / streetSpacing) * streetSpacing;
+                z = Math.round((Math.random() * 8 - 4)) + (Math.random() > 0.5 ? streetSpacing : -streetSpacing);
+                rotationY = Math.PI / 2;
+            } else {
+                x = Math.round((Math.random() * 8 - 4)) + (Math.random() > 0.5 ? streetSpacing : -streetSpacing);
+                z = Math.round((Math.random() * 720 - 360) / streetSpacing) * streetSpacing;
+                rotationY = 0;
+            }
+            if (Math.sqrt(x*x + z*z) > 80) {
+                await loadModel(`/assets/cars/${carModel}`, 
+                    new THREE.Vector3(x, 0, z), 
+                    3.2,
+                    rotationY + (Math.random() > 0.5 ? Math.PI : 0)
+                ).then((car) => {
                     car.position.y = 0;
                 });
+            }
         }
-
+    
+        // Cars on circular street around lake
+        for (let i = 0; i < 8; i++) {
+            const carModel = cars[Math.floor(Math.random() * cars.length)];
+            const angle = (i / 8) * Math.PI * 2;
+            const x = Math.cos(angle) * lakeRingRadius;
+            const z = Math.sin(angle) * lakeRingRadius;
+            const rotationY = angle + Math.PI / 2; // Tangent to circle
+            await loadModel(`/assets/cars/${carModel}`, 
+                new THREE.Vector3(x, 0, z), 
+                3.2,
+                rotationY + (Math.random() > 0.5 ? Math.PI : 0)
+            ).then((car) => {
+                car.position.y = 0;
+            });
+        }
+    
+        // Video plane
         const videoTexture = new THREE.VideoTexture(video);
         videoTexture.minFilter = THREE.LinearFilter;
         videoTexture.magFilter = THREE.LinearFilter;
         const screenMaterial = new THREE.MeshBasicMaterial({ map: videoTexture, side: THREE.DoubleSide });
-        const screenGeometry = new THREE.PlaneGeometry(200, 100);
+        const screenGeometry = new THREE.PlaneGeometry(100, 50);
         this.videoPlane = new THREE.Mesh(screenGeometry, screenMaterial);
-        this.videoPlane.position.set(250, 25, 10);
+        this.videoPlane.position.set(250, 15, 5); // Adjusted for larger map
         this.scene.add(this.videoPlane);
-
+    
+        // Ammo pickups
         const ammoMaterial = new THREE.MeshStandardMaterial({ color: 0xffff00 });
-        for (let i = 0; i < 80; i++) {
+        for (let i = 0; i < 40; i++) {
             const ammoBox = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), ammoMaterial);
-            const x = Math.round((Math.random() * 900 - 450) / 90) * 90 + (streetWidth / 2 + sidewalkWidth / 2);
-            const z = Math.round((Math.random() * 900 - 450) / 90) * 90 + (streetWidth / 2 + sidewalkWidth / 2);
-            ammoBox.position.set(x, 0.5, z);
-            this.scene.add(ammoBox);
-            const ammoBody = new CANNON.Body({ mass: 0 });
-            ammoBody.addShape(new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5)));
-            ammoBody.position.copy(ammoBox.position);
-            this.world.addBody(ammoBody);
-            this.ammoPickups.push({ mesh: ammoBox, body: ammoBody });
+            const x = Math.round((Math.random() * 720 - 360) / streetSpacing) * streetSpacing + (streetWidth/2 + sidewalkWidth/2);
+            const z = Math.round((Math.random() * 720 - 360) / streetSpacing) * streetSpacing + (streetWidth/2 + sidewalkWidth/2);
+            if (Math.sqrt(x*x + z*z) > 80) {
+                ammoBox.position.set(x, 0.5, z);
+                this.scene.add(ammoBox);
+                const ammoBody = new CANNON.Body({ mass: 0 });
+                ammoBody.addShape(new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5)));
+                ammoBody.position.copy(ammoBox.position);
+                this.world.addBody(ammoBody);
+                this.ammoPickups.push({ mesh: ammoBox, body: ammoBody });
+            }
         }
-
+    
+        // Thunder boosts
         const thunderGeometry = new THREE.ConeGeometry(0.5, 2, 8);
         const thunderMaterial = new THREE.MeshStandardMaterial({ 
             color: 0x00ffff,
             emissive: 0x00ffff,
             emissiveIntensity: 0.5 
         });
-        for (let i = 0; i < 100; i++) {
+        for (let i = 0; i < 50; i++) {
             const thunder = new THREE.Mesh(thunderGeometry, thunderMaterial);
-            const x = Math.round((Math.random() * 900 - 450) / 90) * 90 + (streetWidth / 2 + sidewalkWidth / 2);
-            const z = Math.round((Math.random() * 900 - 450) / 90) * 90 + (streetWidth / 2 + sidewalkWidth / 2);
-            thunder.position.set(x, 1, z);
-            this.scene.add(thunder);
-
-            const thunderBody = new CANNON.Body({ mass: 0 });
-            thunderBody.addShape(new CANNON.Cylinder(0.5, 0.5, 2, 8));
-            thunderBody.position.copy(thunder.position);
-            this.world.addBody(thunderBody);
-            this.thunderBoosts.push({ mesh: thunder, body: thunderBody });
+            const x = Math.round((Math.random() * 720 - 360) / streetSpacing) * streetSpacing + (streetWidth/2 + sidewalkWidth/2);
+            const z = Math.round((Math.random() * 720 - 360) / streetSpacing) * streetSpacing + (streetWidth/2 + sidewalkWidth/2);
+            if (Math.sqrt(x*x + z*z) > 80) {
+                thunder.position.set(x, 1, z);
+                this.scene.add(thunder);
+    
+                const thunderBody = new CANNON.Body({ mass: 0 });
+                thunderBody.addShape(new CANNON.Cylinder(0.5, 0.5, 2, 8));
+                thunderBody.position.copy(thunder.position);
+                this.world.addBody(thunderBody);
+                this.thunderBoosts.push({ mesh: thunder, body: thunderBody });
+            }
         }
-
+    
+        // Borders
         const borderMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff });
         const borders = [
-            { size: [5, 100, 1000], pos: [-500, 50, 0] },
-            { size: [5, 100, 1000], pos: [500, 50, 0] },
-            { size: [1000, 100, 5], pos: [0, 50, 500] },
-            { size: [1000, 100, 5], pos: [0, 50, -500] },
+            { size: [3, 50, 800], pos: [-400, 25, 0] },
+            { size: [3, 50, 800], pos: [400, 25, 0] },
+            { size: [800, 50, 3], pos: [0, 25, 400] },
+            { size: [800, 50, 3], pos: [0, 25, -400] },
         ];
         borders.forEach(({ size, pos }) => {
             const border = new THREE.Mesh(new THREE.BoxGeometry(...size), borderMaterial);
@@ -744,10 +925,11 @@ class App {
             borderBody.position.copy(border.position);
             this.world.addBody(borderBody);
         });
+    
+        this.elevatorHeight = 80;
+        this.camera.position.set(0, 4, -15);
 
-        this.camera.position.set(0, 4, -25);
     }
-
     private updateOtherPlayer(socketId: string, player: PlayerData): void {
         if (socketId === this.socket.id) {
             console.warn(`Attempted to update local player ${socketId} as other player - skipping`);
@@ -784,6 +966,8 @@ class App {
             this.loadingPlayers.delete(socketId);
             this.updateOtherPlayerPosition(socketId, player);
         });
+
+        
     }
 
     private updateOtherPlayerPosition(socketId: string, player: PlayerData): void {
