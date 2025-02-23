@@ -137,6 +137,11 @@ class App {
     ];
     private currentCharacterIndex: number = 0;
     private currentScreen: 'username' | 'character' | 'difficulty' = 'username';
+    private portal!: { mesh: THREE.Mesh; body: CANNON.Body; particles: THREE.Points };
+    private secondaryWorldActive: boolean = false;
+    private secondaryWorldScene!: THREE.Scene;
+    private secondaryWorldPickups: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
+    private returnPortal!: { mesh: THREE.Mesh; body: CANNON.Body; particles: THREE.Points };
 
     constructor() {
         this.initialize();
@@ -215,11 +220,40 @@ class App {
         this.characterPreviewRenderer.setSize(300, 300);
         this.characterPreviewRenderer.setClearColor(0x333333, 1);
 
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
-        this.characterPreviewScene.add(ambientLight);
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        directionalLight.position.set(5, 5, 5);
-        this.characterPreviewScene.add(directionalLight);
+// Existing lighting - let's enhance it
+const ambientLight = new THREE.AmbientLight(0x606080, 3.0); // Increased intensity from 2.0 to 3.0, slightly bluer tone
+this.scene.add(ambientLight);
+
+const light1 = new THREE.DirectionalLight(0x8080ff, 1.5); // Increased intensity from 1.0 to 1.5
+light1.position.set(100, 100, 100);
+light1.castShadow = true;
+light1.shadow.mapSize.width = 1024;  // Improve shadow quality
+light1.shadow.mapSize.height = 1024;
+light1.shadow.camera.near = 0.5;
+light1.shadow.camera.far = 500;
+this.scene.add(light1);
+
+const light2 = new THREE.DirectionalLight(0x8080ff, 1.0); // Increased from 0.5 to 1.0
+light2.position.set(-100, 100, -100);
+this.scene.add(light2);
+
+// Add a soft hemisphere light for natural ambient effect
+const hemiLight = new THREE.HemisphereLight(0x8080ff, 0x404060, 0.6); // Sky color, ground color, intensity
+hemiLight.position.set(0, 200, 0);
+this.scene.add(hemiLight);
+
+// Add point lights for dynamic ambient glow (e.g., street lamps or city glow)
+const pointLight1 = new THREE.PointLight(0xffffaa, 1.0, 200); // Warm yellowish light
+pointLight1.position.set(50, 20, 50);
+this.scene.add(pointLight1);
+
+const pointLight2 = new THREE.PointLight(0xffffaa, 1.0, 200);
+pointLight2.position.set(-50, 20, -50);
+this.scene.add(pointLight2);
+
+// Optional: Add subtle fog to enhance lighting depth (adjust as needed)
+this.scene.fog = new THREE.Fog(0x001133, 100, 1000); // Matches sky color, starts at 100, fades to 1000
+
     }
 
     private loadCharacterPreview(modelPath: string): void {
@@ -1177,6 +1211,158 @@ private processPlayersUpdate(players: { [socketId: string]: PlayerData }): void 
         }
 
         this.camera.position.set(0, 2.68, -15);
+
+
+        // Portal to Secondary World
+const portalGeometry = new THREE.CircleGeometry(5, 32);
+const portalMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0x00aaff, 
+    emissive: 0x00aaff, 
+    emissiveIntensity: 1,
+    transparent: true,
+    opacity: 0.8 
+});
+const portalMesh = new THREE.Mesh(portalGeometry, portalMaterial);
+portalMesh.rotation.x = -Math.PI / 2;
+portalMesh.position.set(20, 0.1, 20); // Near center but offset
+this.scene.add(portalMesh);
+
+// Portal Physics
+const portalBody = new CANNON.Body({ mass: 0 });
+portalBody.addShape(new CANNON.Cylinder(5, 5, 0.1, 32));
+portalBody.position.set(20, 0.1, 20);
+this.world.addBody(portalBody);
+
+// Portal Particles
+const particleGeometry = new THREE.BufferGeometry();
+const particleCount = 200;
+const particlePositions = new Float32Array(particleCount * 3);
+const particleVelocities = new Float32Array(particleCount * 3);
+
+const particleTimes = new Float32Array(particleCount); // For animation timing
+for (let i = 0; i < particleCount; i++) {
+    particleTimes[i] = this.rng() * Math.PI * 2; // Random phase offset
+}
+
+for (let i = 0; i < particleCount; i++) {
+    const angle = this.rng() * Math.PI * 2;
+    const radius = this.rng() * 5;
+    particlePositions[i * 3] = Math.cos(angle) * radius + 20;     // x
+    particlePositions[i * 3 + 1] = this.rng() * 0.5;             // y
+    particlePositions[i * 3 + 2] = Math.sin(angle) * radius + 20; // z
+    particleVelocities[i * 3] = 0;                                // vx
+    particleVelocities[i * 3 + 1] = 0.05 + this.rng() * 0.1;     // vy
+    particleVelocities[i * 3 + 2] = 0;                            // vz
+}
+particleGeometry.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
+const particleMaterial = new THREE.PointsMaterial({ 
+    color: 0x00ffff, 
+    size: 0.2, 
+    transparent: true, 
+    blending: THREE.AdditiveBlending 
+});
+const portalParticles = new THREE.Points(particleGeometry, particleMaterial);
+this.scene.add(portalParticles);
+
+this.portal = { mesh: portalMesh, body: portalBody, particles: portalParticles };
+
+// Initialize Secondary World
+this.secondaryWorldScene = new THREE.Scene();
+const secondaryGroundGeometry = new THREE.PlaneGeometry(200, 200);
+const secondaryGroundTexture = textureLoader.load('/assets/textures/grass.jpg');
+secondaryGroundTexture.wrapS = secondaryGroundTexture.wrapT = THREE.RepeatWrapping;
+secondaryGroundTexture.repeat.set(5, 5);
+const secondaryGroundMaterial = new THREE.MeshStandardMaterial({ map: secondaryGroundTexture });
+const secondaryGround = new THREE.Mesh(secondaryGroundGeometry, secondaryGroundMaterial);
+secondaryGround.rotation.x = -Math.PI / 2;
+secondaryGround.position.y = -1;
+this.secondaryWorldScene.add(secondaryGround);
+
+// Trees in Secondary World
+const treeMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22 });
+for (let i = 0; i < 20; i++) {
+    const x = (this.rng() - 0.5) * 180;
+    const z = (this.rng() - 0.5) * 180;
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 5), treeMaterial);
+    const foliage = new THREE.Mesh(new THREE.SphereGeometry(3, 12, 12), treeMaterial);
+    trunk.position.set(x, 2, z);
+    foliage.position.set(x, 4, z);
+    this.secondaryWorldScene.add(trunk, foliage);
+}
+
+// Ammo Pickups in Secondary World
+const secondaryAmmoMaterial = new THREE.MeshStandardMaterial({ color: 0xffff00 });
+for (let i = 0; i < 30; i++) {
+    const x = (this.rng() - 0.5) * 180;
+    const z = (this.rng() - 0.5) * 180;
+    const ammoBox = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), secondaryAmmoMaterial);
+    ammoBox.position.set(x, 0.5, z);
+    this.secondaryWorldScene.add(ammoBox);
+    const ammoBody = new CANNON.Body({ mass: 0 });
+    ammoBody.addShape(new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5)));
+    ammoBody.position.copy(ammoBox.position);
+    this.world.addBody(ammoBody);
+    this.secondaryWorldPickups.push({ mesh: ammoBox, body: ammoBody });
+}
+
+// Return Portal
+const returnPortalGeometry = new THREE.CircleGeometry(5, 32);
+const returnPortalMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0xff00aa, 
+    emissive: 0xff00aa, 
+    emissiveIntensity: 1,
+    transparent: true,
+    opacity: 0.8 
+});
+const returnPortalMesh = new THREE.Mesh(returnPortalGeometry, returnPortalMaterial);
+returnPortalMesh.rotation.x = -Math.PI / 2;
+returnPortalMesh.position.set(0, 0.1, 0);
+this.secondaryWorldScene.add(returnPortalMesh);
+
+const returnPortalBody = new CANNON.Body({ mass: 0 });
+returnPortalBody.addShape(new CANNON.Cylinder(5, 5, 0.1, 32));
+returnPortalBody.position.set(0, 0.1, 0);
+this.world.addBody(returnPortalBody);
+
+// Return Portal Particles
+const returnParticleGeometry = new THREE.BufferGeometry();
+const returnParticlePositions = new Float32Array(particleCount * 3);
+const returnParticleVelocities = new Float32Array(particleCount * 3);
+
+const returnParticleTimes = new Float32Array(particleCount);
+for (let i = 0; i < particleCount; i++) {
+    returnParticleTimes[i] = this.rng() * Math.PI * 2;
+}
+
+for (let i = 0; i < particleCount; i++) {
+    const angle = this.rng() * Math.PI * 2;
+    const radius = this.rng() * 5;
+    returnParticlePositions[i * 3] = Math.cos(angle) * radius;     // x
+    returnParticlePositions[i * 3 + 1] = this.rng() * 0.5;         // y
+    returnParticlePositions[i * 3 + 2] = Math.sin(angle) * radius; // z
+    returnParticleVelocities[i * 3] = 0;                           // vx
+    returnParticleVelocities[i * 3 + 1] = 0.05 + this.rng() * 0.1; // vy
+    returnParticleVelocities[i * 3 + 2] = 0;                       // vz
+}
+returnParticleGeometry.setAttribute('position', new THREE.BufferAttribute(returnParticlePositions, 3));
+const returnParticleMaterial = new THREE.PointsMaterial({ 
+    color: 0xffff00, 
+    size: 0.2, 
+    transparent: true, 
+    blending: THREE.AdditiveBlending 
+});
+const returnPortalParticles = new THREE.Points(returnParticleGeometry, returnParticleMaterial);
+this.secondaryWorldScene.add(returnPortalParticles);
+
+this.returnPortal = { mesh: returnPortalMesh, body: returnPortalBody, particles: returnPortalParticles };
+
+// Add ambient lighting to secondary world (additional 30% brighter)
+const secondaryAmbientLight = new THREE.AmbientLight(0x404060, 3.38); // Previous 2.6 * 1.3 = 3.38
+this.secondaryWorldScene.add(secondaryAmbientLight);
+const secondaryDirectionalLight = new THREE.DirectionalLight(0xffffaa, 1.69); // Previous 1.3 * 1.3 = 1.69
+secondaryDirectionalLight.position.set(50, 50, 50);
+this.secondaryWorldScene.add(secondaryDirectionalLight);
+
     }
 
     private addPark(x: number, z: number): void {
@@ -1480,35 +1666,161 @@ private processPlayersUpdate(players: { [socketId: string]: PlayerData }): void 
             if (this.isSinglePlayer) {
                 this.updateBotBehavior();
             }
+            const particleGeometry = new THREE.BufferGeometry();
+            const particleCount = 200;
+            const particlePositions = new Float32Array(particleCount * 3);
+            const particleVelocities = new Float32Array(particleCount * 3);
+            const returnParticleGeometry = new THREE.BufferGeometry();
+const returnParticlePositions = new Float32Array(particleCount * 3);
+const returnParticleVelocities = new Float32Array(particleCount * 3);
+        // Update Portal Particles
+// Update Portal Particles
+const portalPositions = this.portal.particles.geometry.attributes.position.array as Float32Array;
+const portalVelocities = particleVelocities;
+const time = Date.now() * 0.001; // For continuous animation
+const particleTimes = new Float32Array(particleCount); // For animation timing
+for (let i = 0; i < particleCount; i++) {
+    particleTimes[i] = this.rng() * Math.PI * 2; // Random phase offset
+}
 
-            this.renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
-            this.renderer.setScissorTest(false);
-            this.renderer.render(this.scene, this.camera);
+const returnParticleTimes = new Float32Array(particleCount);
+for (let i = 0; i < particleCount; i++) {
+    returnParticleTimes[i] = this.rng() * Math.PI * 2;
+}
 
-            const miniMapSize = 150;
-            this.renderer.setViewport(window.innerWidth - miniMapSize - 10, 10, miniMapSize, miniMapSize);
-            this.renderer.setScissor(window.innerWidth - miniMapSize - 10, 10, miniMapSize, miniMapSize);
-            this.renderer.setScissorTest(true);
-            this.renderer.setClearColor(0x000000, 0.5);
-            this.renderer.clear();
+for (let i = 0; i < particleCount; i++) {
+    const t = time + particleTimes[i];
+    const radius = 5 * (0.5 + 0.5 * Math.sin(t)); // Pulsing radius
+    const angle = t * 2 + (i / particleCount) * Math.PI * 2; // Swirling motion
+    
+    // Base position with swirl
+    portalPositions[i * 3] = Math.cos(angle) * radius + 20;     // x
+    portalPositions[i * 3 + 2] = Math.sin(angle) * radius + 20; // z
+    
+    // Vertical motion
+    portalPositions[i * 3 + 1] += portalVelocities[i * 3 + 1];
+    if (portalPositions[i * 3 + 1] > 5) {
+        portalPositions[i * 3 + 1] = 0;
+        portalVelocities[i * 3 + 1] = 0.05 + this.rng() * 0.1; // Reset with random speed
+    }
+}
+this.portal.particles.geometry.attributes.position.needsUpdate = true;
 
-            this.scene.traverse((object) => {
-                if (object === this.hero || 
-                    (object.userData && this.bots.has(object.userData.id)) || 
-                    (object.userData && this.otherPlayers.has(object.userData.socketId)) || 
-                    (object instanceof THREE.Mesh && object.scale.y >= 20)) { // Show skyscrapers on minimap
-                    object.visible = true;
-                } else {
-                    object.visible = false;
-                }
-            });
+if (this.secondaryWorldActive) {
+    const returnPositions = this.returnPortal.particles.geometry.attributes.position.array as Float32Array;
+    const returnVelocities = returnParticleVelocities;
+    for (let i = 0; i < particleCount; i++) {
+        const t = time + returnParticleTimes[i];
+        const radius = 5 * (0.5 + 0.5 * Math.sin(t * 1.5)); // Slightly faster pulse
+        const angle = t * 2.5 + (i / particleCount) * Math.PI * 2; // Faster swirl
+        
+        returnPositions[i * 3] = Math.cos(angle) * radius;     // x
+        returnPositions[i * 3 + 2] = Math.sin(angle) * radius; // z
+        
+        returnPositions[i * 3 + 1] += returnVelocities[i * 3 + 1];
+        if (returnPositions[i * 3 + 1] > 5) {
+            returnPositions[i * 3 + 1] = 0;
+            returnVelocities[i * 3 + 1] = 0.05 + this.rng() * 0.1;
+        }
+    }
+    this.returnPortal.particles.geometry.attributes.position.needsUpdate = true;
+}
 
-            if (this.miniMapCamera && this.scene) {
-                this.renderer.render(this.scene, this.miniMapCamera);
-            }
+// Teleportation Logic
+// Update Portal Particles (we'll update this in step 2 below)
 
-            this.renderer.setScissorTest(false);
-            this.scene.traverse((object) => object.visible = true);
+// Teleportation Logic
+if (!this.secondaryWorldActive) {
+    const distanceToPortal = this.hero.position.distanceTo(this.portal.mesh.position);
+    if (distanceToPortal < 6) {
+        this.secondaryWorldActive = true;
+        this.heroBody.position.set(50, 0.1, 50); // Ground level (0.1 to be just above surface)
+        this.heroBody.velocity.set(0, 0, 0);    // Reset velocity to prevent jumping
+        this.hero.position.copy(this.heroBody.position);
+        this.scene.traverse(obj => obj.visible = false);
+        this.secondaryWorldScene.traverse(obj => obj.visible = true);
+    }
+} else {
+    const distanceToReturnPortal = this.hero.position.distanceTo(this.returnPortal.mesh.position);
+    if (distanceToReturnPortal < 6) {
+        this.secondaryWorldActive = false;
+        this.heroBody.position.set(50, 0.1, 50); // Ground level return position
+        this.heroBody.velocity.set(0, 0, 0);    // Reset velocity
+        this.hero.position.copy(this.heroBody.position);
+        this.scene.traverse(obj => obj.visible = true);
+        this.secondaryWorldScene.traverse(obj => obj.visible = false);
+    }
+
+    // Secondary World Ammo Pickups
+    this.secondaryWorldPickups.forEach((pickup, index) => {
+        const distance = this.hero.position.distanceTo(pickup.mesh.position);
+        if (distance < 3) {
+            this.ammo += 20;
+            this.ammoCounter.textContent = `Ammo: ${this.ammo}`;
+            this.updateAmmoWarning();
+            this.secondaryWorldScene.remove(pickup.mesh);
+            this.world.removeBody(pickup.body);
+            this.secondaryWorldPickups.splice(index, 1);
+        }
+    });
+}  
+
+if (!this.secondaryWorldActive) {
+    this.renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
+    this.renderer.setScissorTest(false);
+    this.renderer.render(this.scene, this.camera);
+
+    const miniMapSize = 150;
+    this.renderer.setViewport(window.innerWidth - miniMapSize - 10, 10, miniMapSize, miniMapSize);
+    this.renderer.setScissor(window.innerWidth - miniMapSize - 10, 10, miniMapSize, miniMapSize);
+    this.renderer.setScissorTest(true);
+    this.renderer.setClearColor(0x000000, 0.5);
+    this.renderer.clear();
+
+    this.scene.traverse((object) => {
+        if (object === this.hero || 
+            (object.userData && this.bots.has(object.userData.id)) || 
+            (object.userData && this.otherPlayers.has(object.userData.socketId)) || 
+            (object instanceof THREE.Mesh && object.scale.y >= 20)) {
+            object.visible = true;
+        } else {
+            object.visible = false;
+        }
+    });
+
+    if (this.miniMapCamera) {
+        this.renderer.render(this.scene, this.miniMapCamera);
+    }
+} else {
+    this.renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
+    this.renderer.setScissorTest(false);
+    this.renderer.render(this.secondaryWorldScene, this.camera);
+
+    const miniMapSize = 150;
+    this.renderer.setViewport(window.innerWidth - miniMapSize - 10, 10, miniMapSize, miniMapSize);
+    this.renderer.setScissor(window.innerWidth - miniMapSize - 10, 10, miniMapSize, miniMapSize);
+    this.renderer.setScissorTest(true);
+    this.renderer.setClearColor(0x000000, 0.5);
+    this.renderer.clear();
+
+    this.secondaryWorldScene.traverse((object) => {
+        if (object === this.hero || object === this.returnPortal.mesh) {
+            object.visible = true;
+        } else {
+            object.visible = false;
+        }
+    });
+
+    if (this.miniMapCamera) {
+        this.miniMapCamera.position.set(this.hero.position.x, 200, this.hero.position.z);
+        this.miniMapCamera.lookAt(this.hero.position);
+        this.renderer.render(this.secondaryWorldScene, this.miniMapCamera);
+    }
+}
+
+this.renderer.setScissorTest(false);
+this.scene.traverse((object) => object.visible = !this.secondaryWorldActive);
+this.secondaryWorldScene.traverse((object) => object.visible = this.secondaryWorldActive);
         }
     }
 }
