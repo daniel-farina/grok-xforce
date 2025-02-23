@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
+import { SimplexNoise } from "three/examples/jsm/math/SimplexNoise.js"; // Add this import
 import * as CANNON from "cannon-es";
 import { io, Socket } from "socket.io-client";
 const seedrandom = require('seedrandom');
@@ -56,6 +57,10 @@ class App {
     private bullets: { mesh: THREE.Mesh; body: CANNON.Body; owner: string }[] = [];
     private sparks: { mesh: THREE.Mesh; lifetime: number }[] = [];
     private buildings: { mesh: THREE.Object3D; body: CANNON.Body }[] = [];
+    private noise: SimplexNoise; // Will be initialized with seed in setupSocketEvents
+    private rng: () => number = Math.random; // Seeded RNG function
+    private streetXPositions: number[] = [];
+    private streetZPositions: number[] = [];
     private ammo: number = 5000;
     private lives: number = 5;
     private health: number = 100;
@@ -78,7 +83,6 @@ class App {
     private lobby!: HTMLElement;
     private lobbyTitle!: HTMLElement;
     private hud!: HTMLElement;
-
     private resumeButton!: HTMLElement;
     private joinButton!: HTMLElement;
     private singlePlayerButton!: HTMLElement;
@@ -259,14 +263,18 @@ class App {
             if (!this.isReady) {
                 if (this.isSinglePlayer) {
                     this.roomId = "singleplayer_" + Date.now();
-                    const rng = seedrandom(this.roomId);
-                    Math.random = () => rng();
-                    this.lobby.style.display = "none";
-                    this.hud.style.display = "flex";
+                    const seededRng = seedrandom(this.roomId);
+                    this.rng = () => seededRng(); // Assign to class property
+                    this.noise = new SimplexNoise({ random: this.rng }); // Initialize noise with seeded RNG
+                    this.characterSelection.style.display = "none";
+                    this.difficultySelection.style.display = "none";
+                    this.lobbyTitle.textContent = `Starting Single Player - Level ${this.level}`;
+                    this.readyButton.style.display = "none";
                     this.isReady = true;
                     this.isPaused = true;
                     this.createScene({ x: 0, y: 2.68, z: 0 }).then(() => {
                         this.createBots();
+                        this.lobby.style.display = "none";
                         this.animate();
                     });
                 } else {
@@ -289,35 +297,15 @@ class App {
             }
         });
 
-        this.readyButton.addEventListener("click", () => {
-            if (!this.isReady) {
-                if (this.isSinglePlayer) {
-                    this.roomId = "singleplayer_" + Date.now();
-                    const rng = seedrandom(this.roomId);
-                    Math.random = () => rng();
-                    this.characterSelection.style.display = "none";
-                    this.difficultySelection.style.display = "none";
-                    this.lobbyTitle.textContent = `Starting Single Player - Level ${this.level}`;
-                    this.readyButton.style.display = "none";
-                    this.isReady = true;
-                    this.isPaused = true;
-                    this.createScene({ x: 0, y: 2.68, z: 0 }).then(() => {
-                        this.createBots();
-                        this.lobby.style.display = "none";
-                        this.animate();
-                    });
-                } else {
-                    this.socket.emit("login", { name: this.playerName, avatar: this.selectedCharacter });
-                }
-            }
-        });
+
 
         this.socket.on("loginSuccess", (data: { roomId: string; playerId: number; name: string; position?: { x: number; y: number; z: number } }) => {
             this.roomId = data.roomId;
             this.playerId = data.playerId;
             this.playerName = data.name;
-            const rng = seedrandom(this.roomId);
-            Math.random = () => rng();
+            const seededRng = seedrandom(this.roomId); // Create seeded RNG
+            this.rng = () => seededRng(); // Assign to class property
+            this.noise = new SimplexNoise({ random: this.rng }); // Initialize noise with seeded RNG
             this.characterSelection.style.display = "none";
             this.lobbyTitle.textContent = "Waiting for Players";
             this.readyButton.style.display = "none";
@@ -400,12 +388,27 @@ class App {
         }
     }
 
-    private processPlayersUpdate(players: { [socketId: string]: PlayerData }): void {
-        const now = Date.now();
-        if (now - this.lastPlayersUpdateTimestamp < this.debounceInterval) return;
-        this.lastPlayersUpdateTimestamp = now;
+// Add this property to the class (near other private properties, around line 50)
+private playerStatsCache: Map<string, { health: number; lives: number; ammo: number }> = new Map();
 
-        Object.entries(players).forEach(([socketId, player]) => {
+private processPlayersUpdate(players: { [socketId: string]: PlayerData }): void {
+    const now = Date.now();
+    if (now - this.lastPlayersUpdateTimestamp < this.debounceInterval) return;
+    this.lastPlayersUpdateTimestamp = now;
+
+    Object.entries(players).forEach(([socketId, player]) => {
+        const cacheKey = socketId;
+        const cachedStats = this.playerStatsCache.get(cacheKey) || { health: -1, lives: -1, ammo: -1 };
+        const newStats = {
+            health: player.health,
+            lives: player.lives,
+            ammo: player.ammo || 50
+        };
+
+        // Only update if stats have changed
+        if (cachedStats.health !== newStats.health || cachedStats.lives !== newStats.lives || cachedStats.ammo !== newStats.ammo) {
+            this.playerStatsCache.set(cacheKey, newStats);
+
             if (socketId === this.socket.id) {
                 this.lives = player.lives;
                 this.health = player.health;
@@ -418,9 +421,14 @@ class App {
                 this.updateIndicators(this.hero, this.health, this.lives, this.ammo);
             } else {
                 this.updateOtherPlayer(socketId, player);
+                const playerObj = this.otherPlayers.get(socketId);
+                if (playerObj) {
+                    this.updateIndicators(playerObj.mesh, player.health, player.lives, player.ammo || 50);
+                }
             }
-        });
-    }
+        }
+    });
+}
 
     private createBots(): void {
         if (this.isLoadingBots) return;
@@ -443,19 +451,18 @@ class App {
             let x, z;
             let attempts = 0;
             do {
-                x = (Math.random() - 0.5) * 800;
-                z = (Math.random() - 0.5) * 800;
+                x = (this.rng() - 0.5) * 800;
+                z = (this.rng() - 0.5) * 800;
                 attempts++;
             } while (!this.isPositionClear(new THREE.Vector3(x, 0, z), 10) && attempts < 100);
 
             if (attempts >= 100) {
                 console.warn(`Could not find clear position for bot ${botId}`);
-                x = (Math.random() - 0.5) * 800;
-                z = (Math.random() - 0.5) * 800;
+                x = (this.rng() - 0.5) * 800;
+                z = (this.rng() - 0.5) * 800;
             }
 
-            const difficulty = ['easy', 'medium', 'hard'][Math.floor(Math.random() * 3)] as 'easy' | 'medium' | 'hard';
-
+            const difficulty = ['easy', 'medium', 'hard'][Math.floor(this.rng() * 3)] as 'easy' | 'medium' | 'hard';
             gltfLoader.load('/assets/characters/character-male-a.glb', (gltf) => {
                 const mesh = gltf.scene;
                 mesh.scale.set(2.68, 2.68, 2.68);
@@ -485,8 +492,8 @@ class App {
                         body,
                         healthBar,
                         difficulty,
-                        shootTimer: Math.random() * 3000,
-                        fleeTimer: Math.random() * 5000,
+                        shootTimer: this.rng() * 3000,
+                        fleeTimer: this.rng() * 5000,
                         ammo: 50,
                         health: 100,
                         lives: 5,
@@ -573,13 +580,13 @@ class App {
                 const shootDirection = directionToPlayer.clone();
                 const accuracy = bot.difficulty === 'easy' ? 0.2 : bot.difficulty === 'medium' ? 0.1 : 0.05;
                 shootDirection.add(new THREE.Vector3(
-                    (Math.random() - 0.5) * accuracy,
-                    (Math.random() - 0.5) * accuracy,
-                    (Math.random() - 0.5) * accuracy
+                    (this.rng() - 0.5) * accuracy,
+                    (this.rng() - 0.5) * accuracy,
+                    (this.rng() - 0.5) * accuracy
                 )).normalize();
                 this.spawnBullet(bot.mesh.position.clone().add(new THREE.Vector3(0, 6, 0)), shootDirection, bot.id);
                 bot.ammo--;
-                bot.shootTimer = Math.random() * 1000;
+                bot.shootTimer = this.rng() * 1000;
                 this.updateIndicators(bot.mesh, bot.health, bot.lives, bot.ammo);
             }
 
@@ -602,13 +609,13 @@ class App {
             for (let i = 0; i < 5; i++) {
                 const dot = healthBar.children[i] as THREE.Mesh;
                 if (i < lives) {
-                    const healthPerLife = 100 / 5;
-                    const lifeHealth = Math.max(0, Math.min(health - i * healthPerLife, healthPerLife));
-                    if (lifeHealth > 15) dot.material.color.set(0x00ff00);
-                    else if (lifeHealth > 10) dot.material.color.set(0xffff00);
-                    else if (lifeHealth > 5) dot.material.color.set(0xffa500);
-                    else dot.material.color.set(0xff0000);
+                    const healthPerLife = 100 / lives; // Dynamic health per life based on remaining lives
+                    const lifeHealth = health - (i * healthPerLife); // Calculate remaining health for this life
                     dot.visible = true;
+                    if (lifeHealth > healthPerLife * 0.75) dot.material.color.set(0x00ff00); // Green: >75%
+                    else if (lifeHealth > healthPerLife * 0.50) dot.material.color.set(0xffff00); // Yellow: >50%
+                    else if (lifeHealth > healthPerLife * 0.25) dot.material.color.set(0xffa500); // Orange: >25%
+                    else dot.material.color.set(0xff0000); // Red: ≤25%
                 } else {
                     dot.visible = false;
                 }
@@ -784,6 +791,11 @@ class App {
             this.world.removeBody(boost.body);
         });
         this.thunderBoosts = [];
+        this.buildings.forEach(building => {
+            this.scene.remove(building.mesh);
+            this.world.removeBody(building.body);
+        });
+        this.buildings = [];
         if (this.hero) this.scene.remove(this.hero);
         if (this.heroBody) this.world.removeBody(this.heroBody);
         this.lobby.style.display = "block";
@@ -834,6 +846,23 @@ class App {
         this.sparks.push({ mesh: spark, lifetime: 500 });
     }
 
+    private getNoise(x: number, z: number, scale: number = 0.005): number {
+        // Simple fractal noise using SimplexNoise
+        const octaves = 4;
+        let total = 0;
+        let frequency = scale;
+        let amplitude = 1;
+        let maxValue = 0;
+    
+        for (let i = 0; i < octaves; i++) {
+            total += this.noise.noise(x * frequency, z * frequency) * amplitude; // Changed to .noise
+            maxValue += amplitude;
+            amplitude *= 0.5; // Persistence
+            frequency *= 2;   // Lacunarity
+        }
+        return total / maxValue * 0.5 + 0.5; // Normalize to [0, 1]
+    }
+
     private async createScene(initialPosition?: { x: number; y: number; z: number }): Promise<void> {
         const gltfLoader = new GLTFLoader();
         const heroGltf = await gltfLoader.loadAsync(`/assets/characters/${this.selectedCharacter}`);
@@ -864,15 +893,23 @@ class App {
         }
 
         const textureLoader = new THREE.TextureLoader();
-        const groundTexture = textureLoader.load('/assets/textures/ground.jpg');
+        const groundTexture = textureLoader.load('/assets/textures/concrete.jpg');
         groundTexture.wrapS = groundTexture.wrapT = THREE.RepeatWrapping;
-        groundTexture.repeat.set(40, 40);
+        groundTexture.repeat.set(10, 10);
         const groundVisualMaterial = new THREE.MeshStandardMaterial({ map: groundTexture });
         const groundGeometry = new THREE.PlaneGeometry(800, 800);
         const ground = new THREE.Mesh(groundGeometry, groundVisualMaterial);
         ground.rotation.x = -Math.PI / 2;
         ground.position.y = -1;
         this.scene.add(ground);
+
+        const earthTextureLoader = new THREE.TextureLoader();
+        const earthTexture = earthTextureLoader.load('/assets/textures/earth.jpg');
+        const earthGeometry = new THREE.SphereGeometry(20, 64, 64);
+        const earthMaterial = new THREE.MeshBasicMaterial({ map: earthTexture });
+        const earth = new THREE.Mesh(earthGeometry, earthMaterial);
+        earth.position.set(200, 300, -400);
+        this.scene.add(earth);
 
         const groundPhysicsMaterial = new CANNON.Material({ friction: 0.5, restitution: 0 });
         const groundBody = new CANNON.Body({ mass: 0, material: groundPhysicsMaterial });
@@ -887,43 +924,55 @@ class App {
         const streetMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
         const sidewalkMaterial = new THREE.MeshStandardMaterial({ color: 0x888888 });
 
+        this.streetXPositions = [];
+        this.streetZPositions = [];
+
+        // Perturbed streets
         for (let x = -400; x <= 400; x += streetSpacing) {
+            const offset = this.getNoise(x, 0) * 10 - 5; // ±5 units perturbation
+            const streetXPos = x + offset;
+            this.streetXPositions.push(streetXPos);
+
             const streetX = new THREE.Mesh(new THREE.PlaneGeometry(800, streetWidth), streetMaterial);
             streetX.rotation.x = -Math.PI / 2;
-            streetX.position.set(x, -0.95, 0);
+            streetX.position.set(streetXPos, -0.95, 0);
             this.scene.add(streetX);
 
             const sidewalkX1 = new THREE.Mesh(new THREE.PlaneGeometry(800, sidewalkWidth), sidewalkMaterial);
             sidewalkX1.rotation.x = -Math.PI / 2;
-            sidewalkX1.position.set(x - streetWidth / 2 - sidewalkWidth / 2, -0.9, 0);
+            sidewalkX1.position.set(streetXPos - streetWidth / 2 - sidewalkWidth / 2, -0.9, 0);
             this.scene.add(sidewalkX1);
 
             const sidewalkX2 = new THREE.Mesh(new THREE.PlaneGeometry(800, sidewalkWidth), sidewalkMaterial);
             sidewalkX2.rotation.x = -Math.PI / 2;
-            sidewalkX2.position.set(x + streetWidth / 2 + sidewalkWidth / 2, -0.9, 0);
+            sidewalkX2.position.set(streetXPos + streetWidth / 2 + sidewalkWidth / 2, -0.9, 0);
             this.scene.add(sidewalkX2);
         }
 
         for (let z = -400; z <= 400; z += streetSpacing) {
+            const offset = this.getNoise(0, z) * 10 - 5;
+            const streetZPos = z + offset;
+            this.streetZPositions.push(streetZPos);
+
             const streetZ = new THREE.Mesh(new THREE.PlaneGeometry(streetWidth, 800), streetMaterial);
             streetZ.rotation.x = -Math.PI / 2;
-            streetZ.position.set(0, -0.95, z);
+            streetZ.position.set(0, -0.95, streetZPos);
             this.scene.add(streetZ);
 
             const sidewalkZ1 = new THREE.Mesh(new THREE.PlaneGeometry(streetWidth, 800), sidewalkMaterial);
             sidewalkZ1.rotation.x = -Math.PI / 2;
-            sidewalkZ1.position.set(0, -0.9, z - streetWidth / 2 - sidewalkWidth / 2);
+            sidewalkZ1.position.set(0, -0.9, streetZPos - streetWidth / 2 - sidewalkWidth / 2);
             this.scene.add(sidewalkZ1);
 
             const sidewalkZ2 = new THREE.Mesh(new THREE.PlaneGeometry(streetWidth, 800), sidewalkMaterial);
             sidewalkZ2.rotation.x = -Math.PI / 2;
-            sidewalkZ2.position.set(0, -0.9, z + streetWidth / 2 + sidewalkWidth / 2);
+            sidewalkZ2.position.set(0, -0.9, streetZPos + streetWidth / 2 + sidewalkWidth / 2);
             this.scene.add(sidewalkZ2);
         }
 
-        const skyscrapers = ["skyscraperA.glb", "skyscraperB.glb", "skyscraperC.glb"];
+        const skyscrapers = ["skyscraperA.glb", "skyscraperB.glb", "skyscraperC.glb", "skyscraperD.glb", "skyscraperE.glb"];
         const largeBuildings = ["large_buildingA.glb", "large_buildingB.glb", "large_buildingC.glb"];
-        const lowBuildings = ["low_buildingA.glb", "low_buildingB.glb", "low_buildingC.glb"];
+        const lowBuildings = ["small_buildingD.glb"];
         const cars = ["sedan.glb", "suv.glb", "taxi.glb"];
 
         const staticMaterial = new CANNON.Material({ friction: 0.5, restitution: 0 });
@@ -955,27 +1004,34 @@ class App {
 
         for (let x = -400; x <= 400; x += streetSpacing) {
             for (let z = -400; z <= 400; z += streetSpacing) {
-                if (Math.abs(x) < streetWidth / 2 || Math.abs(z) < streetWidth / 2) continue;
+                const noiseValue = this.getNoise(x, z);
                 const distance = Math.sqrt(x * x + z * z);
-                let buildingType;
-                let scale;
-                let attempts = 0;
-                let spawnX, spawnZ;
-                do {
-                    spawnX = x + (Math.random() - 0.5) * streetSpacing;
-                    spawnZ = z + (Math.random() - 0.5) * streetSpacing;
-                    attempts++;
-                } while (!this.isPositionClear(new THREE.Vector3(spawnX, -1, spawnZ), 10) && attempts < 50);
-
-                if (distance < 100 && this.isPositionClear(new THREE.Vector3(spawnX, -1, spawnZ), 10)) {
+        
+                if (Math.abs(x) < streetWidth / 2 || Math.abs(z) < streetWidth / 2) continue;
+        
+                let spawnX = x + (this.rng() - 0.5) * streetSpacing * 0.8;
+                let spawnZ = z + (this.rng() - 0.5) * streetSpacing * 0.8;
+        
+                spawnX += this.getNoise(x, z, 0.01) * 10 - 5; // Additional noise perturbation
+                spawnZ += this.getNoise(z, x, 0.01) * 10 - 5;
+        
+                let buildingType: string[];
+                let scale: number;
+        
+                // Zoning and building type selection
+                if (noiseValue > 0.7 && distance < 250 && this.isPositionClear(new THREE.Vector3(spawnX, -1, spawnZ), 25)) {
                     buildingType = skyscrapers;
-                    scale = 30;
-                } else if (distance < 300 && Math.random() < 0.2 && this.isPositionClear(new THREE.Vector3(spawnX, -1, spawnZ), 10)) {
+                    scale = 25 + this.rng() * 15;
+                } else if (noiseValue > 0.5 && noiseValue <= 0.7 && distance < 350 && this.rng() < 0.6 && this.isPositionClear(new THREE.Vector3(spawnX, -1, spawnZ), 15)) {
                     buildingType = largeBuildings;
-                    scale = 15;
-                } else if (Math.random() < 0.3 && this.isPositionClear(new THREE.Vector3(spawnX, -1, spawnZ), 10)) {
+                    scale = 12.5 + this.rng() * 5;
+                } else if (noiseValue > 0.3 && noiseValue <= 0.5 && this.rng() < 0.4 && this.isPositionClear(new THREE.Vector3(spawnX, -1, spawnZ), 10)) {
                     buildingType = lowBuildings;
-                    scale = 10;
+                    scale = 9 + this.rng() * 2;
+                } else if (noiseValue <= 0.3 && this.isPositionClear(new THREE.Vector3(spawnX, -1, spawnZ), 10)) { // Adjusted threshold
+                    // Park/Natural area
+                    this.addPark(spawnX, spawnZ);
+                    continue;
                 } else {
                     continue;
                 }
@@ -991,29 +1047,30 @@ class App {
                 for (const pos of positions) {
                     if (this.isPositionClear(pos, 10)) {
                         await loadModel(
-                            `/assets/models/${buildingType[Math.floor(Math.random() * buildingType.length)]}`,
+                            `/assets/models/${buildingType[Math.floor(this.rng() * buildingType.length)]}`,
                             pos,
                             scale,
-                            Math.random() * Math.PI * 2
+                            this.rng() * Math.PI * 2
                         );
                     }
                 }
             }
         }
 
+        // Car placement with noise-based variation
         for (let i = 0; i < 20; i++) {
-            const carModel = cars[Math.floor(Math.random() * cars.length)];
-            const isXStreet = Math.random() > 0.5;
+            const carModel = cars[Math.floor(this.rng() * cars.length)];
+            const isXStreet = this.rng() > 0.5;
             let x, z, rotationY;
             let attempts = 0;
             do {
                 if (isXStreet) {
-                    x = -400 + Math.random() * 800;
-                    z = Math.round((Math.random() * 800 - 400) / streetSpacing) * streetSpacing;
+                    x = this.streetXPositions[Math.floor(this.rng() * this.streetXPositions.length)];
+                    z = -400 + this.rng() * 800;
                     rotationY = Math.PI / 2;
                 } else {
-                    x = Math.round((Math.random() * 800 - 400) / streetSpacing) * streetSpacing;
-                    z = -400 + Math.random() * 800;
+                    x = -400 + this.rng() * 800;
+                    z = this.streetZPositions[Math.floor(this.rng() * this.streetZPositions.length)];
                     rotationY = 0;
                 }
                 attempts++;
@@ -1024,7 +1081,7 @@ class App {
                     `/assets/cars/${carModel}`,
                     new THREE.Vector3(x, 0, z),
                     3.2,
-                    rotationY + (Math.random() > 0.5 ? Math.PI : 0)
+                    rotationY + (this.rng() > 0.5 ? Math.PI : 0)
                 ).then((car) => {
                     car.position.y = 0;
                     const body = this.buildings[this.buildings.length - 1].body;
@@ -1042,9 +1099,9 @@ class App {
         const starCount = 2000;
         const positions = new Float32Array(starCount * 3);
         for (let i = 0; i < starCount; i++) {
-            positions[i * 3] = (Math.random() - 0.5) * 2000;
-            positions[i * 3 + 1] = Math.random() * 1000;
-            positions[i * 3 + 2] = (Math.random() - 0.5) * 2000;
+            positions[i * 3] = (this.rng() - 0.5) * 2000;
+            positions[i * 3 + 1] = this.rng() * 1000;
+            positions[i * 3 + 2] = (this.rng() - 0.5) * 2000;
         }
         starGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         const starMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 1, sizeAttenuation: true });
@@ -1078,8 +1135,8 @@ class App {
             let x, z;
             let attempts = 0;
             do {
-                x = Math.round((Math.random() * 800 - 400) / streetSpacing) * streetSpacing + (streetWidth / 2 + sidewalkWidth / 2);
-                z = Math.round((Math.random() * 800 - 400) / streetSpacing) * streetSpacing + (streetWidth / 2 + sidewalkWidth / 2);
+                x = this.streetXPositions[Math.floor(this.rng() * this.streetXPositions.length)] + (this.rng() - 0.5) * 20;
+                z = this.streetZPositions[Math.floor(this.rng() * this.streetZPositions.length)] + (this.rng() - 0.5) * 20;
                 attempts++;
             } while (!this.isPositionClear(new THREE.Vector3(x, 0.5, z), 10) && attempts < 50);
 
@@ -1101,8 +1158,8 @@ class App {
             let x, z;
             let attempts = 0;
             do {
-                x = Math.round((Math.random() * 800 - 400) / streetSpacing) * streetSpacing + (streetWidth / 2 + sidewalkWidth / 2);
-                z = Math.round((Math.random() * 800 - 400) / streetSpacing) * streetSpacing + (streetWidth / 2 + sidewalkWidth / 2);
+                x = this.streetXPositions[Math.floor(this.rng() * this.streetXPositions.length)] + (this.rng() - 0.5) * 20;
+                z = this.streetZPositions[Math.floor(this.rng() * this.streetZPositions.length)] + (this.rng() - 0.5) * 20;
                 attempts++;
             } while (!this.isPositionClear(new THREE.Vector3(x, 1, z), 10) && attempts < 50);
 
@@ -1119,31 +1176,29 @@ class App {
             }
         }
 
-        const treeMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22 });
-        for (let i = 0; i < 100; i++) {
-            let x, z;
-            let attempts = 0;
-            do {
-                x = Math.round((Math.random() * 800 - 400) / streetSpacing) * streetSpacing + (streetWidth / 2 + sidewalkWidth / 2);
-                z = Math.round((Math.random() * 800 - 400) / streetSpacing) * streetSpacing + (streetWidth / 2 + sidewalkWidth / 2);
-                attempts++;
-            } while (!this.isPositionClear(new THREE.Vector3(x, 1, z), 10) && attempts < 50);
+        this.camera.position.set(0, 2.68, -15);
+    }
 
-            if (Math.abs(x) > streetWidth && Math.abs(z) > streetWidth) {
+    private addPark(x: number, z: number): void {
+        const treeMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22 });
+        const treeCount = 5 + Math.floor(this.rng() * 5);
+        for (let i = 0; i < treeCount; i++) {
+            const offsetX = (this.rng() - 0.5) * 20;
+            const offsetZ = (this.rng() - 0.5) * 20;
+            const pos = new THREE.Vector3(x + offsetX, 1, z + offsetZ);
+            if (this.isPositionClear(pos, 5)) {
                 const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 3), treeMaterial);
                 const foliage = new THREE.Mesh(new THREE.SphereGeometry(2, 12, 12), treeMaterial);
-                trunk.position.set(x, 1, z);
-                foliage.position.set(x, 2.5, z);
+                trunk.position.set(pos.x, 1, pos.z);
+                foliage.position.set(pos.x, 2.5, pos.z);
                 this.scene.add(trunk, foliage);
             }
         }
-
-        this.camera.position.set(0, 2.68, -15);
     }
 
     private updateOtherPlayer(socketId: string, player: PlayerData): void {
         if (socketId === this.socket.id) return;
-
+    
         if (!this.otherPlayers.has(socketId) && !this.loadingPlayers.has(socketId)) {
             this.loadingPlayers.add(socketId);
             const gltfLoader = new GLTFLoader();
@@ -1151,8 +1206,10 @@ class App {
                 const mesh = gltf.scene;
                 mesh.scale.set(2.68, 2.68, 2.68);
                 mesh.position.set(player.position.x, player.position.y, player.position.z);
+                // Apply initial 180-degree Y rotation to flip model orientation
+                mesh.rotation.set(player.rotation.x, player.rotation.y + Math.PI, player.rotation.z);
                 this.scene.add(mesh);
-
+    
                 const healthBar = new THREE.Group();
                 for (let i = 0; i < 5; i++) {
                     const dotGeometry = new THREE.CircleGeometry(0.2, 16);
@@ -1162,10 +1219,10 @@ class App {
                     healthBar.add(dot);
                 }
                 mesh.add(healthBar);
-
+    
                 this.otherPlayers.set(socketId, { mesh, healthBar });
                 this.loadingPlayers.delete(socketId);
-
+    
                 this.updateIndicators(mesh, player.health, player.lives, player.ammo || 50);
             });
         } else {
@@ -1177,11 +1234,11 @@ class App {
         const playerObj = this.otherPlayers.get(socketId);
         if (playerObj) {
             playerObj.mesh.position.set(player.position.x, player.position.y, player.position.z);
-            playerObj.mesh.rotation.y = player.rotation.y;
+            // Apply server-provided rotation and flip 180 degrees around Y-axis
+            playerObj.mesh.rotation.set(player.rotation.x, player.rotation.y + Math.PI, player.rotation.z);
             this.updateIndicators(playerObj.mesh, player.health, player.lives, player.ammo || 50);
         }
     }
-
     private animate(): void {
         requestAnimationFrame(() => this.animate());
 
@@ -1242,7 +1299,7 @@ class App {
             }
 
             this.hero.position.copy(this.heroBody.position);
-            this.hero.rotation.y = this.camera.rotation.y;
+            this.hero.rotation.y = this.camera.rotation.y + Math.PI; // Flip hero model 180 degrees
 
             const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
             forward.y = 0;
@@ -1326,7 +1383,6 @@ class App {
                 }
 
                 if (this.isSinglePlayer) {
-                    console.log(`Updating ${this.bots.size} bots`);
                     this.bots.forEach((bot) => {
                         if (bullet.owner !== bot.id) {
                             const distance = bullet.mesh.position.distanceTo(bot.mesh.position);
@@ -1440,7 +1496,7 @@ class App {
                 if (object === this.hero || 
                     (object.userData && this.bots.has(object.userData.id)) || 
                     (object.userData && this.otherPlayers.has(object.userData.socketId)) || 
-                    (object instanceof THREE.Mesh && object.scale.y === 30)) {
+                    (object instanceof THREE.Mesh && object.scale.y >= 20)) { // Show skyscrapers on minimap
                     object.visible = true;
                 } else {
                     object.visible = false;
