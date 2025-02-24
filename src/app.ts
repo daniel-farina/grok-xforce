@@ -351,7 +351,7 @@ class PodRacingGame {
             console.log(`Speed increased to ${this.podSpeed}`);
         }
     
-        // Pod Movement (unchanged)
+        // Pod Movement with Smoothing
         const trackLength = this.trackPath.getLength();
         this.podDistance += this.podSpeed * deltaTime;
         if (this.podDistance > trackLength) this.podDistance -= trackLength;
@@ -363,20 +363,33 @@ class PodRacingGame {
         const binormal = tangent.clone().cross(normal).normalize();
     
         const maxOffset = 20;
-        if (this.moveLeft) this.podOffsetX -= 1.5;
-        if (this.moveRight) this.podOffsetX += 1.5;
-        if (this.moveUp) this.podOffsetY += 1.5;
-        if (this.moveDown) this.podOffsetY -= 1.5;
+        const moveSpeed = 30; // Speed of target offset change
+        const lerpFactor = 0.1; // Smoothing factor (0.1 = slow, 0.5 = fast)
+    
+        // Update target offsets based on input
+        if (this.moveLeft) this.podOffsetX -= moveSpeed * deltaTime;
+        if (this.moveRight) this.podOffsetX += moveSpeed * deltaTime;
+        if (this.moveUp) this.podOffsetY += moveSpeed * deltaTime;
+        if (this.moveDown) this.podOffsetY -= moveSpeed * deltaTime;
+    
+        // Clamp target offsets
         this.podOffsetX = Math.max(-maxOffset, Math.min(maxOffset, this.podOffsetX));
         this.podOffsetY = Math.max(-maxOffset, Math.min(maxOffset, this.podOffsetY));
-        this.podOffsetX *= 0.9;
-        this.podOffsetY *= 0.9;
     
-        const podOffsetVec = normal.clone().multiplyScalar(this.podOffsetX).add(binormal.clone().multiplyScalar(this.podOffsetY));
+        // Smoothly interpolate current offsets toward targets
+        this.currentOffsetX = THREE.MathUtils.lerp(this.currentOffsetX, this.podOffsetX, lerpFactor);
+        this.currentOffsetY = THREE.MathUtils.lerp(this.currentOffsetY, this.podOffsetY, lerpFactor);
+    
+        // Apply smoothed offsets
+        const podOffsetVec = normal.clone().multiplyScalar(this.currentOffsetX).add(binormal.clone().multiplyScalar(this.currentOffsetY));
         const podPos = basePos.clone().add(podOffsetVec);
         this.podBody.position.copy(podPos);
         this.pod.position.copy(this.podBody.position);
         this.pod.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), tangent);
+    
+        // Reset target offsets when no input (for natural return to center)
+        if (!this.moveLeft && !this.moveRight) this.podOffsetX *= 0.9;
+        if (!this.moveUp && !this.moveDown) this.podOffsetY *= 0.9;
     
         // Camera Modes (unchanged)
         switch (this.cameraMode) {
@@ -467,9 +480,9 @@ class PodRacingGame {
         }
         this.thrusterParticles.geometry.attributes.position.needsUpdate = true;
     
-        // Dynamic Light (Brighter Pulse)
+        // Dynamic Light (unchanged)
         this.dynamicLight.position.copy(this.pod.position);
-        this.dynamicLight.intensity = 4 + Math.sin(this.survivalTime * 2) * 2; // Faster, stronger pulse
+        this.dynamicLight.intensity = 4 + Math.sin(this.survivalTime * 2) * 2;
     
         this.updateHUD();
         this.renderer.render(this.scene, this.camera);
