@@ -18,7 +18,7 @@ class PodRacingGame {
     private trackPath!: THREE.CatmullRomCurve3;
     private rng: () => number = Math.random;
     private ammo: number = 20;
-    private health: number = 100;
+    private lives: number = 10;
     private moveLeft: boolean = false;
     private moveRight: boolean = false;
     private isPaused: boolean = false;
@@ -29,8 +29,9 @@ class PodRacingGame {
     private podDistance: number = 0;
     private podOffset: number = 0;
     private tubeRadius: number = 20;
+    private cameraMode: number = 0;
     private ammoCounter!: HTMLElement;
-    private healthCounter!: HTMLElement;
+    private livesCounter!: HTMLElement;
     private countdownElement!: HTMLElement;
     private hud!: HTMLElement;
     private pauseMenu!: HTMLElement;
@@ -55,7 +56,7 @@ class PodRacingGame {
 
     private assignDomElements(): void {
         this.ammoCounter = document.getElementById("ammoCounter") as HTMLElement;
-        this.healthCounter = document.getElementById("healthCounter") as HTMLElement;
+        this.livesCounter = document.getElementById("healthCounter") as HTMLElement;
         this.countdownElement = document.getElementById("countdown") as HTMLElement;
         this.hud = document.getElementById("hud") as HTMLElement;
         this.pauseMenu = document.getElementById("pauseMenu") as HTMLElement;
@@ -67,9 +68,12 @@ class PodRacingGame {
         document.addEventListener("keydown", (event) => {
             if (this.isPaused) return;
             switch (event.keyCode) {
-                case 65: this.moveLeft = true; break; // A
-                case 68: this.moveRight = true; break; // D
-                case 83: this.shoot(); break; // S
+                case 65: this.moveRight = true; break; // A (right)
+                case 68: this.moveLeft = true; break; // D (left)
+                case 32: this.shoot(); break; // Spacebar
+                case 67: 
+                    this.cameraMode = (this.cameraMode + 1) % 3;
+                    break;
                 case 27: 
                     this.isPaused = !this.isPaused;
                     this.pauseMenu.style.display = this.isPaused ? "block" : "none";
@@ -79,8 +83,8 @@ class PodRacingGame {
 
         document.addEventListener("keyup", (event) => {
             switch (event.keyCode) {
-                case 65: this.moveLeft = false; break;
-                case 68: this.moveRight = false; break;
+                case 65: this.moveRight = false; break; // A
+                case 68: this.moveLeft = false; break; // D
             }
         });
 
@@ -97,7 +101,7 @@ class PodRacingGame {
         const podGeometry = new THREE.SphereGeometry(2, 32, 32);
         const podMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000, metalness: 0.8, roughness: 0.2 });
         this.pod = new THREE.Mesh(podGeometry, podMaterial);
-        this.pod.position.set(200, 0, 0);
+        this.pod.position.set(300, 2, 0); // Slightly above the plane
         this.scene.add(this.pod);
 
         this.podBody = new CANNON.Body({ mass: 1 });
@@ -105,25 +109,48 @@ class PodRacingGame {
         this.podBody.position.copy(this.pod.position);
         this.world.addBody(this.podBody);
 
-        // Larger, Multi-Directional Tube Track
+        // Longer, Flat Curved Plane Track with Concrete Texture
         const points = [
-            new THREE.Vector3(200, 0, 0),
-            new THREE.Vector3(150, 50, 100),
-            new THREE.Vector3(0, 100, 200),
-            new THREE.Vector3(-150, 50, 100),
-            new THREE.Vector3(-200, 0, 0),
-            new THREE.Vector3(-150, -50, -100),
-            new THREE.Vector3(0, -100, -200),
-            new THREE.Vector3(150, -50, -100),
-            new THREE.Vector3(200, 0, 0)
+            new THREE.Vector3(300, 0, 0),
+            new THREE.Vector3(250, 50*this.rng(), 100*this.rng()),
+            new THREE.Vector3(150, 75*this.rng(), 200),
+            new THREE.Vector3(0, 100*this.rng(), 300),
+            new THREE.Vector3(-150, 50*this.rng(), 200*this.rng()),
+            new THREE.Vector3(-250, -25*this.rng(), 100),
+            new THREE.Vector3(-300, -50*this.rng(), 0),
+            new THREE.Vector3(-250, -75*this.rng(), -100*this.rng()),
+            new THREE.Vector3(-150, -100*this.rng(), -200),
+            new THREE.Vector3(0, -50*this.rng(), -300),
+            new THREE.Vector3(150, 25*this.rng(), -200*this.rng()),
+            new THREE.Vector3(250, 50*this.rng(), -100),
+            new THREE.Vector3(300, 0, 0)
         ];
         this.trackPath = new THREE.CatmullRomCurve3(points, true);
-        const trackGeometry = new THREE.TubeGeometry(this.trackPath, 64, this.tubeRadius, 16, true);
+
+        // Create a flat plane and bend it along the path
+        const trackGeometry = new THREE.PlaneGeometry(this.tubeRadius * 2, 100, 16, 64); // Width x Length, segments
+        const positionAttribute = trackGeometry.attributes.position;
+        for (let i = 0; i < positionAttribute.count; i++) {
+            const t = i / (positionAttribute.count - 1); // Normalize along length
+            const point = this.trackPath.getPointAt(t % 1);
+            const tangent = this.trackPath.getTangentAt(t % 1);
+            const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
+            const binormal = tangent.clone().cross(normal).normalize(); // Now defined here
+            const x = positionAttribute.getX(i); // Width offset
+            const pos = point.clone().addScaledVector(binormal, x); // Use binormal for width
+            positionAttribute.setXYZ(i, pos.x, pos.y, pos.z);
+        }
+        trackGeometry.computeVertexNormals();
+
+        const textureLoader = new THREE.TextureLoader();
+        const tubeTexture = textureLoader.load('/assets/textures/concrete.jpg');
+        tubeTexture.wrapS = tubeTexture.wrapT = THREE.RepeatWrapping;
+        tubeTexture.repeat.set(20, 2);
         const trackMaterial = new THREE.MeshStandardMaterial({ 
-            color: 0x888888, 
+            map: tubeTexture,
             metalness: 0.9, 
             roughness: 0.1, 
-            side: THREE.BackSide // Render inner surface
+            side: THREE.DoubleSide 
         });
         this.track = new THREE.Mesh(trackGeometry, trackMaterial);
         this.scene.add(this.track);
@@ -137,7 +164,7 @@ class PodRacingGame {
         }
         this.world.addBody(trackBody);
 
-        // Obstacles (Asteroids)
+        // Obstacles (Rotating Asteroids)
         const loader = new GLTFLoader();
         const asteroidPromise = loader.loadAsync('assets/asteroid.gltf');
         for (let i = 0; i < 5; i++) {
@@ -146,15 +173,16 @@ class PodRacingGame {
             const tangent = this.trackPath.getTangentAt(t);
             const offset = (this.rng() - 0.5) * (this.tubeRadius - 3);
             const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
+            const binormal = tangent.clone().cross(normal).normalize(); // Define binormal here
 
             const asteroidData = await asteroidPromise;
             const asteroid = asteroidData.scene.clone();
-            asteroid.scale.set(0.05, 0.05, 0.05); // Adjust scale to fit tube
-            asteroid.position.copy(basePos).addScaledVector(normal, offset);
+            asteroid.scale.set(0.05, 0.05, 0.05);
+            asteroid.position.copy(basePos).addScaledVector(binormal, offset).addScaledVector(normal, 2); // Above plane
             this.scene.add(asteroid);
 
             const obstacleBody = new CANNON.Body({ mass: 0 });
-            obstacleBody.addShape(new CANNON.Box(new CANNON.Vec3(1, 1, 1))); // Approx asteroid size
+            obstacleBody.addShape(new CANNON.Box(new CANNON.Vec3(1, 1, 1)));
             obstacleBody.position.copy(asteroid.position);
             this.world.addBody(obstacleBody);
             this.obstacles.push({ mesh: asteroid, body: obstacleBody });
@@ -174,7 +202,8 @@ class PodRacingGame {
             const tangent = this.trackPath.getTangentAt(t);
             const offset = (this.rng() - 0.5) * (this.tubeRadius - 3);
             const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
-            pickup.position.copy(basePos).addScaledVector(normal, offset);
+            const binormal = tangent.clone().cross(normal).normalize(); // Define binormal here
+            pickup.position.copy(basePos).addScaledVector(binormal, offset).addScaledVector(normal, 2);
             this.scene.add(pickup);
 
             const pickupBody = new CANNON.Body({ mass: 0 });
@@ -184,13 +213,22 @@ class PodRacingGame {
             this.ammoPickups.push({ mesh: pickup, body: pickupBody, ammoValue: type.ammoValue });
         }
 
-        // Sky
-        const skyGeometry = new THREE.SphereGeometry(2000, 32, 32);
-        const skyMaterial = new THREE.MeshBasicMaterial({ color: 0x1a2a44, side: THREE.BackSide });
-        this.scene.add(new THREE.Mesh(skyGeometry, skyMaterial));
+        // Stars in Space
+        const starGeometry = new THREE.BufferGeometry();
+        const starCount = 5000;
+        const positions = new Float32Array(starCount * 3);
+        for (let i = 0; i < starCount * 3; i += 3) {
+            positions[i] = (Math.random() - 0.5) * 4000;
+            positions[i + 1] = (Math.random() - 0.5) * 4000;
+            positions[i + 2] = (Math.random() - 0.5) * 4000;
+        }
+        starGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        const starMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 3 });
+        const stars = new THREE.Points(starGeometry, starMaterial);
+        this.scene.add(stars);
 
-        // Lighting (brighter tunnel with ambient light)
-        this.scene.add(new THREE.AmbientLight(0x808080, 2.0)); // Bright ambient light
+        // Lighting (brighter with ambient light)
+        this.scene.add(new THREE.AmbientLight(0xaaaaaa, 2.5));
         const directionalLight = new THREE.DirectionalLight(0xffffff, 2.0);
         directionalLight.position.set(50, 100, 50);
         this.scene.add(directionalLight);
@@ -211,7 +249,7 @@ class PodRacingGame {
         const bulletBody = new CANNON.Body({ mass: 1 });
         bulletBody.addShape(new CANNON.Sphere(0.5));
         bulletBody.position.copy(bullet.position);
-        bulletBody.velocity.set(direction.x * 100, direction.y * 100, direction.z * 100);
+        bulletBody.velocity.set(direction.x * 200, direction.y * 200, direction.z * 200);
         this.world.addBody(bulletBody);
         this.bullets.push({ mesh: bullet, body: bulletBody });
 
@@ -222,7 +260,7 @@ class PodRacingGame {
                 this.world.removeBody(this.bullets[index].body);
                 this.bullets.splice(index, 1);
             }
-        }, 2000);
+        }, 5000);
     }
 
     private animate(): void {
@@ -257,22 +295,43 @@ class PodRacingGame {
         const basePos = this.trackPath.getPointAt(t);
         const tangent = this.trackPath.getTangentAt(t);
         const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
+        const binormal = tangent.clone().cross(normal).normalize();
 
-        const maxOffset = (this.tubeRadius - 2) / 2; // Use half the available space
+        const maxOffset = (this.tubeRadius - 2) / 2;
         if (this.moveLeft) this.podOffset -= 1;
         if (this.moveRight) this.podOffset += 1;
         this.podOffset = Math.max(-maxOffset, Math.min(maxOffset, this.podOffset));
         this.podOffset *= 0.9;
 
-        const podOffsetVec = normal.clone().multiplyScalar(this.podOffset);
-        const podPos = basePos.clone().add(podOffsetVec);
+        const podOffsetVec = binormal.clone().multiplyScalar(this.podOffset);
+        const podPos = basePos.clone().add(podOffsetVec).addScaledVector(normal, 2); // Above plane
         this.podBody.position.copy(podPos);
         this.pod.position.copy(this.podBody.position);
-        this.pod.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), tangent);
+        this.pod.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), tangent);
 
-        // Camera (inside the torus, following pod)
-        this.camera.position.copy(this.pod.position);
-        this.camera.quaternion.copy(this.pod.quaternion);
+        // Camera Modes
+        switch (this.cameraMode) {
+            case 0: // First-Person View
+                this.camera.position.copy(this.pod.position);
+                this.camera.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), tangent);
+                this.camera.rotateX(-Math.PI / 6); // Slight downward tilt
+                break;
+            case 1: // Close Chase View
+                this.camera.position.copy(this.pod.position).addScaledVector(tangent.negate(), 10).addScaledVector(normal, 5);
+                this.camera.lookAt(this.pod.position);
+                break;
+            case 2: // Far Map View
+                this.camera.position.set(0, 500, 0);
+                this.camera.lookAt(new THREE.Vector3(0, 0, 0));
+                break;
+        }
+
+        // Rotate Asteroids
+        this.obstacles.forEach(obstacle => {
+            obstacle.mesh.rotation.x += 0.01;
+            obstacle.mesh.rotation.y += 0.01;
+            obstacle.mesh.rotation.z += 0.01;
+        });
 
         // Bullet Collision
         this.bullets.forEach((bullet, bulletIndex) => {
@@ -303,9 +362,9 @@ class PodRacingGame {
         // Obstacle Collision (Asteroids)
         this.obstacles.forEach((obstacle) => {
             if (this.pod.position.distanceTo(obstacle.mesh.position) < 3) {
-                this.health -= 10;
-                this.healthCounter.textContent = `Shield: ${this.health}`;
-                if (this.health <= 0) {
+                this.lives -= 1;
+                this.livesCounter.textContent = `Lives: ${this.lives}`;
+                if (this.lives <= 0) {
                     this.isPaused = true;
                     this.pauseMenu.style.display = "block";
                     alert("Game Over!");
