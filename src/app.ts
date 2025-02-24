@@ -115,7 +115,7 @@ class PodRacingGame {
     private async createScene(): Promise<void> {
         this.rng = seedrandom("pod_racing_seed");
     
-        // Pod (Sphere)
+        // Pod (Sphere) - unchanged
         const podGeometry = new THREE.SphereGeometry(2, 32, 32);
         const podMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000, metalness: 0.8, roughness: 0.2, emissive: 0x550000, emissiveIntensity: 1.5 });
         this.pod = new THREE.Mesh(podGeometry, podMaterial);
@@ -127,7 +127,7 @@ class PodRacingGame {
         this.podBody.position.copy(this.pod.position);
         this.world.addBody(this.podBody);
     
-        // Smoother, Non-Overlapping Path (unchanged)
+        // Smoother, Non-Overlapping Path - unchanged
         const points = [
             new THREE.Vector3(1500, 0, 0),
             new THREE.Vector3(1200, 200, 600),
@@ -165,69 +165,74 @@ class PodRacingGame {
         ];
         this.trackPath = new THREE.CatmullRomCurve3(points, true, 'centripetal', 0.5);
     
-        // Glowing Path Line (Brighter)
+        // Glowing Path Line - unchanged
         const pathPoints = this.trackPath.getPoints(512);
         const pathGeometry = new THREE.BufferGeometry().setFromPoints(pathPoints);
         const pathMaterial = new THREE.LineBasicMaterial({ color: 0x00ffff, emissive: 0x00ffff, linewidth: 5, emissiveIntensity: 2 });
         this.pathLine = new THREE.Line(pathGeometry, pathMaterial);
         this.scene.add(this.pathLine);
     
-        // Obstacles (Rotating Asteroids - 75)
+        // Obstacles (Random Asteroids with Texture - 1500 initially)
         const loader = new GLTFLoader();
         const asteroidPromise = loader.loadAsync('assets/asteroid.gltf');
-        for (let i = 0; i < 75; i++) {
+        const textureLoaderAsteroid = new THREE.TextureLoader();
+        const asteroidTexture = textureLoaderAsteroid.load('/assets/textures/asteroid.jpg');
+        for (let i = 0; i < 1500; i++) {
             const t = this.rng();
             const basePos = this.trackPath.getPointAt(t);
             const tangent = this.trackPath.getTangentAt(t);
-            const offsetX = (this.rng() - 0.5) * 40;
-            const offsetY = (this.rng() - 0.5) * 40;
+            const offsetX = (this.rng() - 0.5) * 1000; // Wider spread for camera view
+            const offsetY = (this.rng() - 0.5) * 1000;
+            const offsetZ = (this.rng() - 0.5) * 1000;
             const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
             const binormal = tangent.clone().cross(normal).normalize();
     
             const asteroidData = await asteroidPromise;
             const asteroid = asteroidData.scene.clone();
-            asteroid.scale.set(0.05 + this.rng() * 0.05, 0.05 + this.rng() * 0.05, 0.05 + this.rng() * 0.05);
-            asteroid.position.copy(basePos).addScaledVector(normal, offsetX).addScaledVector(binormal, offsetY);
+            asteroid.scale.set(0.1 + this.rng() * 0.1, 0.1 + this.rng() * 0.1, 0.1 + this.rng() * 0.1);
+            asteroid.position.copy(basePos).addScaledVector(normal, offsetX).addScaledVector(binormal, offsetY).addScaledVector(tangent, offsetZ);
+            asteroid.traverse(child => {
+                if (child instanceof THREE.Mesh) {
+                    child.material = new THREE.MeshStandardMaterial({ map: asteroidTexture });
+                }
+            });
             this.scene.add(asteroid);
     
             const obstacleBody = new CANNON.Body({ mass: 0 });
-            obstacleBody.addShape(new CANNON.Box(new CANNON.Vec3(1, 1, 1)));
+            obstacleBody.addShape(new CANNON.Box(new CANNON.Vec3(2, 2, 2)));
             obstacleBody.position.copy(asteroid.position);
             this.world.addBody(obstacleBody);
             this.obstacles.push({ mesh: asteroid, body: obstacleBody });
         }
     
-        // Ammo Pickups (Brighter)
-        const pickupTypes = [
-            { geometry: new THREE.BoxGeometry(1, 1, 1), color: 0xffff00, ammoValue: 5 },
-            { geometry: new THREE.SphereGeometry(0.75, 16, 16), color: 0x00ff00, ammoValue: 10 },
-            { geometry: new THREE.ConeGeometry(0.5, 1.5, 8), color: 0x0000ff, ammoValue: 15 }
-        ];
-        for (let i = 0; i < 15; i++) {
-            const type = pickupTypes[Math.floor(this.rng() * pickupTypes.length)];
-            const pickup = new THREE.Mesh(type.geometry, new THREE.MeshStandardMaterial({ color: type.color, emissive: type.color, emissiveIntensity: 2 }));
-            const t = i / 15;
+        // Ammo Pickups (300, using Crystal GLTF)
+        const crystalPromise = loader.loadAsync('/assets/textures/crystal/crystal.gltf');
+        for (let i = 0; i < 300; i++) {
+            const crystalData = await crystalPromise;
+            const crystal = crystalData.scene.clone();
+            crystal.scale.set(0.5, 0.5, 0.5); // Adjust size as needed
+            const t = i / 300;
             const basePos = this.trackPath.getPointAt(t);
             const tangent = this.trackPath.getTangentAt(t);
             const offsetX = (this.rng() - 0.5) * 10;
             const offsetY = (this.rng() - 0.5) * 10;
             const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
             const binormal = tangent.clone().cross(normal).normalize();
-            pickup.position.copy(basePos).addScaledVector(normal, offsetX).addScaledVector(binormal, offsetY);
-            this.scene.add(pickup);
+            crystal.position.copy(basePos).addScaledVector(normal, offsetX).addScaledVector(binormal, offsetY);
+            this.scene.add(crystal);
     
             const pickupBody = new CANNON.Body({ mass: 0 });
             pickupBody.addShape(new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5)));
-            pickupBody.position.copy(pickup.position);
+            pickupBody.position.copy(crystal.position);
             this.world.addBody(pickupBody);
-            this.ammoPickups.push({ mesh: pickup, body: pickupBody, ammoValue: type.ammoValue });
+            this.ammoPickups.push({ mesh: crystal, body: pickupBody, ammoValue: 10 }); // Fixed value for simplicity
         }
     
-        // Speed Boost Pickups (Brighter)
+        // Speed Boost Pickups (50) - unchanged
         const boostGeometry = new THREE.TorusGeometry(1, 0.3, 16, 32);
-        for (let i = 0; i < 5; i++) {
+        for (let i = 0; i < 50; i++) {
             const boost = new THREE.Mesh(boostGeometry, new THREE.MeshStandardMaterial({ color: 0xff00ff, emissive: 0xff00ff, emissiveIntensity: 2 }));
-            const t = this.rng();
+            const t = i / 50;
             const basePos = this.trackPath.getPointAt(t);
             const tangent = this.trackPath.getTangentAt(t);
             const offsetX = (this.rng() - 0.5) * 10;
@@ -245,36 +250,47 @@ class PodRacingGame {
             this.speedBoosts.push({ mesh: boost, body: boostBody });
         }
     
-        // Stars in Space (unchanged)
+        // Stars in Space - unchanged
         const starGeometry = new THREE.BufferGeometry();
-        const starCount = 15000;
+        const starCount = 20000;
         const positions = new Float32Array(starCount * 3);
         for (let i = 0; i < starCount * 3; i += 3) {
-            positions[i] = (this.rng() - 0.5) * 20000;
-            positions[i + 1] = (this.rng() - 0.5) * 20000;
-            positions[i + 2] = (this.rng() - 0.5) * 20000;
+            positions[i] = (this.rng() - 0.5) * 30000;
+            positions[i + 1] = (this.rng() - 0.5) * 30000;
+            positions[i + 2] = (this.rng() - 0.5) * 30000;
         }
         starGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         const starMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 3 });
         const stars = new THREE.Points(starGeometry, starMaterial);
         this.scene.add(stars);
     
-        // Planets (unchanged)
-        const planetTextures = ['/assets/textures/planet1.jpg', '/assets/textures/planet2.jpg', '/assets/textures/planet3.jpg'];
+        // Planets with Textures (No Rings)
         const textureLoader = new THREE.TextureLoader();
-        for (let i = 0; i < 5; i++) {
-            const planetGeometry = new THREE.SphereGeometry(500 + this.rng() * 1000, 32, 32);
-            const planetMaterial = new THREE.MeshStandardMaterial({ map: textureLoader.load(planetTextures[i % 3]) });
-            const planet = new THREE.Mesh(planetGeometry, planetMaterial);
-            planet.position.set(
-                (this.rng() - 0.5) * 15000,
-                (this.rng() - 0.5) * 15000,
-                (this.rng() - 0.5) * 15000
-            );
-            this.scene.add(planet);
-        }
+        
+        // Earth
+        const earthGeometry = new THREE.SphereGeometry(1000, 32, 32);
+        const earthMaterial = new THREE.MeshStandardMaterial({ map: textureLoader.load('/assets/textures/earth.jpg') });
+        const earth = new THREE.Mesh(earthGeometry, earthMaterial);
+        earth.position.set(5000, 2000, 10000);
+        this.scene.add(earth);
     
-        // Thruster Particles (Brighter)
+        // Moon (Orbiting Earth)
+        const moonGeometry = new THREE.SphereGeometry(300, 32, 32);
+        const moonMaterial = new THREE.MeshStandardMaterial({ map: textureLoader.load('/assets/textures/moon.jpg') });
+        const moon = new THREE.Mesh(moonGeometry, moonMaterial);
+        moon.position.set(earth.position.x + 2000, earth.position.y, earth.position.z);
+        this.scene.add(moon);
+    
+        // Mars
+        const marsGeometry = new THREE.SphereGeometry(800, 32, 32);
+        const marsMaterial = new THREE.MeshStandardMaterial({ map: textureLoader.load('/assets/textures/mars.jpg') });
+        const mars = new THREE.Mesh(marsGeometry, marsMaterial);
+        mars.position.set(-6000, -3000, 12000);
+        this.scene.add(mars);
+    
+        this.scene.userData = { earth, moon };
+    
+        // Thruster Particles - unchanged
         const particleCount = 100;
         const particleGeometry = new THREE.BufferGeometry();
         const particlePositions = new Float32Array(particleCount * 3);
@@ -283,15 +299,26 @@ class PodRacingGame {
         this.thrusterParticles = new THREE.Points(particleGeometry, particleMaterial);
         this.scene.add(this.thrusterParticles);
     
-        // Improved Lighting
-        this.scene.add(new THREE.AmbientLight(0xaaaaaa, 3)); // Stronger ambient light
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 2); // Sun-like light
+        // Explosion Particles (for asteroid hits)
+        const explosionGeometry = new THREE.BufferGeometry();
+        const explosionPositions = new Float32Array(200 * 3); // 200 particles
+        explosionGeometry.setAttribute('position', new THREE.BufferAttribute(explosionPositions, 3));
+        const explosionMaterial = new THREE.PointsMaterial({ color: 0xff4500, size: 1, transparent: true, opacity: 0.8 });
+        this.scene.userData.explosionParticles = new THREE.Points(explosionGeometry, explosionMaterial);
+        this.scene.add(this.scene.userData.explosionParticles);
+    
+        // Lighting - unchanged
+        this.scene.add(new THREE.AmbientLight(0xaaaaaa, 3));
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 2);
         directionalLight.position.set(5000, 5000, 5000);
         directionalLight.castShadow = true;
         this.scene.add(directionalLight);
-        this.dynamicLight = new THREE.PointLight(0xffaa00, 4, 20000); // Brighter, longer-range point light
+        this.dynamicLight = new THREE.PointLight(0xffaa00, 4, 20000);
         this.scene.add(this.dynamicLight);
-    }
+    
+        // Progress Bar Setup (assumes HTML element exists)
+        this.scene.userData.level = 1; // Track level
+    } 
 
     private shoot(): void {
         if (this.ammo <= 0 || !this.raceStarted) return;
@@ -326,7 +353,7 @@ class PodRacingGame {
         this.world.step(1 / 60);
         const deltaTime = 1 / 60;
     
-        // Countdown Logic (unchanged)
+        // Countdown Logic - unchanged
         if (!this.raceStarted) {
             this.countdownTimer += deltaTime;
             const timeLeft = Math.max(0, this.countdown - this.countdownTimer);
@@ -343,7 +370,7 @@ class PodRacingGame {
             return;
         }
     
-        // Survival Time and Speed Increase (unchanged)
+        // Survival Time and Speed Increase - unchanged
         this.survivalTime += deltaTime;
         this.score += this.podSpeed * deltaTime;
         if (this.survivalTime % 10 < deltaTime) {
@@ -351,10 +378,65 @@ class PodRacingGame {
             console.log(`Speed increased to ${this.podSpeed}`);
         }
     
-        // Pod Movement with Smoothing
+        // Pod Movement with Smoothing - unchanged
         const trackLength = this.trackPath.getLength();
         this.podDistance += this.podSpeed * deltaTime;
-        if (this.podDistance > trackLength) this.podDistance -= trackLength;
+        if (this.podDistance > trackLength) {
+            // Level Complete
+            this.scene.userData.level += 1;
+            this.podSpeed *= 1.01; // 1% speed increase
+            const newAsteroidCount = Math.floor(this.obstacles.length * 1.02); // 2% more asteroids
+            this.podDistance = 0;
+            this.survivalTime = 0;
+            this.scene.remove(this.pathLine);
+            this.obstacles.forEach(o => {
+                this.scene.remove(o.mesh);
+                this.world.removeBody(o.body);
+            });
+            this.ammoPickups.forEach(p => {
+                this.scene.remove(p.mesh);
+                this.world.removeBody(p.body);
+            });
+            this.speedBoosts.forEach(b => {
+                this.scene.remove(b.mesh);
+                this.world.removeBody(b.body);
+            });
+            this.obstacles = [];
+            this.ammoPickups = [];
+            this.speedBoosts = [];
+            this.createScene().then(() => {
+                const asteroidDiff = newAsteroidCount - 1500;
+                const loader = new GLTFLoader();
+                const textureLoader = new THREE.TextureLoader();
+                const asteroidTexture = textureLoader.load('/assets/asteroid_texture.jpg');
+                loader.loadAsync('assets/asteroid.gltf').then(asteroidData => {
+                    for (let i = 0; i < asteroidDiff; i++) {
+                        const t = this.rng();
+                        const basePos = this.trackPath.getPointAt(t);
+                        const tangent = this.trackPath.getTangentAt(t);
+                        const offsetX = (this.rng() - 0.5) * 1000;
+                        const offsetY = (this.rng() - 0.5) * 1000;
+                        const offsetZ = (this.rng() - 0.5) * 1000;
+                        const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
+                        const binormal = tangent.clone().cross(normal).normalize();
+    
+                        const asteroid = asteroidData.scene.clone();
+                        asteroid.scale.set(0.1 + this.rng() * 0.1, 0.1 + this.rng() * 0.1, 0.1 + this.rng() * 0.1);
+                        asteroid.position.copy(basePos).addScaledVector(normal, offsetX).addScaledVector(binormal, offsetY).addScaledVector(tangent, offsetZ);
+                        asteroid.traverse(child => {
+                            if (child instanceof THREE.Mesh) child.material = new THREE.MeshStandardMaterial({ map: asteroidTexture });
+                        });
+                        this.scene.add(asteroid);
+    
+                        const obstacleBody = new CANNON.Body({ mass: 0 });
+                        obstacleBody.addShape(new CANNON.Box(new CANNON.Vec3(2, 2, 2)));
+                        obstacleBody.position.copy(asteroid.position);
+                        this.world.addBody(obstacleBody);
+                        this.obstacles.push({ mesh: asteroid, body: obstacleBody });
+                    }
+                });
+            });
+        }
     
         const t = this.podDistance / trackLength;
         const basePos = this.trackPath.getPointAt(t);
@@ -363,63 +445,71 @@ class PodRacingGame {
         const binormal = tangent.clone().cross(normal).normalize();
     
         const maxOffset = 20;
-        const moveSpeed = 30; // Speed of target offset change
-        const lerpFactor = 0.1; // Smoothing factor (0.1 = slow, 0.5 = fast)
+        const moveSpeed = 30;
+        const lerpFactor = 0.1;
     
-        // Update target offsets based on input
         if (this.moveLeft) this.podOffsetX -= moveSpeed * deltaTime;
         if (this.moveRight) this.podOffsetX += moveSpeed * deltaTime;
         if (this.moveUp) this.podOffsetY += moveSpeed * deltaTime;
         if (this.moveDown) this.podOffsetY -= moveSpeed * deltaTime;
     
-        // Clamp target offsets
         this.podOffsetX = Math.max(-maxOffset, Math.min(maxOffset, this.podOffsetX));
         this.podOffsetY = Math.max(-maxOffset, Math.min(maxOffset, this.podOffsetY));
     
-        // Smoothly interpolate current offsets toward targets
         this.currentOffsetX = THREE.MathUtils.lerp(this.currentOffsetX, this.podOffsetX, lerpFactor);
         this.currentOffsetY = THREE.MathUtils.lerp(this.currentOffsetY, this.podOffsetY, lerpFactor);
     
-        // Apply smoothed offsets
         const podOffsetVec = normal.clone().multiplyScalar(this.currentOffsetX).add(binormal.clone().multiplyScalar(this.currentOffsetY));
         const podPos = basePos.clone().add(podOffsetVec);
         this.podBody.position.copy(podPos);
         this.pod.position.copy(this.podBody.position);
         this.pod.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), tangent);
     
-        // Reset target offsets when no input (for natural return to center)
         if (!this.moveLeft && !this.moveRight) this.podOffsetX *= 0.9;
         if (!this.moveUp && !this.moveDown) this.podOffsetY *= 0.9;
     
-        // Camera Modes (unchanged)
+        // Camera Modes - unchanged
         switch (this.cameraMode) {
-            case 0: // First-Person View
+            case 0: 
                 this.camera.position.copy(this.pod.position).addScaledVector(tangent, -2);
                 this.camera.quaternion.copy(this.pod.quaternion);
                 break;
-            case 1: // Close Chase View
+            case 1: 
                 this.camera.position.copy(this.pod.position).addScaledVector(tangent.negate(), 15).addScaledVector(normal, 5);
                 this.camera.lookAt(this.pod.position);
                 break;
-            case 2: // Far Map View
+            case 2: 
                 this.camera.position.set(0, 5000, 0);
                 this.camera.lookAt(new THREE.Vector3(0, 0, 0));
                 break;
         }
     
-        // Rotate Asteroids (unchanged)
+        // Rotate Asteroids (Slower) - unchanged
         this.obstacles.forEach(obstacle => {
-            obstacle.mesh.rotation.x += 0.01 * (1 + this.podSpeed / 40);
-            obstacle.mesh.rotation.y += 0.01 * (1 + this.podSpeed / 40);
-            obstacle.mesh.rotation.z += 0.01 * (1 + this.podSpeed / 40);
+            obstacle.mesh.rotation.x += 0.005 * (1 + this.podSpeed / 40);
+            obstacle.mesh.rotation.y += 0.005 * (1 + this.podSpeed / 40);
+            obstacle.mesh.rotation.z += 0.005 * (1 + this.podSpeed / 40);
             obstacle.body.position.copy(obstacle.mesh.position);
         });
     
-        // Bullet Collision and Movement (unchanged)
+        // Moon Orbit around Earth - unchanged
+        const earth = this.scene.userData.earth as THREE.Mesh;
+        const moon = this.scene.userData.moon as THREE.Mesh;
+        const orbitRadius = 2000;
+        const orbitSpeed = 0.5;
+        const angle = this.survivalTime * orbitSpeed;
+        moon.position.set(
+            earth.position.x + Math.cos(angle) * orbitRadius,
+            earth.position.y + Math.sin(angle) * orbitRadius * 0.2,
+            earth.position.z + Math.sin(angle) * orbitRadius
+        );
+    
+        // Bullet Collision and Movement
         this.bullets.forEach((bullet, bulletIndex) => {
             bullet.mesh.position.copy(bullet.body.position);
             this.obstacles.forEach((obstacle, obsIndex) => {
-                if (bullet.mesh.position.distanceTo(obstacle.mesh.position) < 2) {
+                if (bullet.mesh.position.distanceTo(obstacle.mesh.position) < 4) {
+                    this.explodeAsteroid(obstacle.mesh.position);
                     this.scene.remove(obstacle.mesh);
                     this.world.removeBody(obstacle.body);
                     this.obstacles.splice(obsIndex, 1);
@@ -437,7 +527,7 @@ class PodRacingGame {
             }
         });
     
-        // Pickup Collision (Ammo) (unchanged)
+        // Pickup Collision (Ammo) - unchanged
         this.ammoPickups.forEach((pickup, index) => {
             if (this.pod.position.distanceTo(pickup.mesh.position) < 2.5) {
                 this.ammo += pickup.ammoValue;
@@ -447,7 +537,7 @@ class PodRacingGame {
             }
         });
     
-        // Speed Boost Collision (unchanged)
+        // Speed Boost Collision - unchanged
         this.speedBoosts.forEach((boost, index) => {
             if (this.pod.position.distanceTo(boost.mesh.position) < 2.5) {
                 this.podSpeed += 20;
@@ -458,9 +548,13 @@ class PodRacingGame {
             }
         });
     
-        // Obstacle Collision (Asteroids) (unchanged)
-        this.obstacles.forEach((obstacle) => {
-            if (this.pod.position.distanceTo(obstacle.mesh.position) < 3) {
+        // Obstacle Collision (Asteroids)
+        this.obstacles.forEach((obstacle, index) => {
+            if (this.pod.position.distanceTo(obstacle.mesh.position) < 6) {
+                this.explodeAsteroid(obstacle.mesh.position);
+                this.scene.remove(obstacle.mesh);
+                this.world.removeBody(obstacle.body);
+                this.obstacles.splice(index, 1);
                 this.lives -= 1;
                 this.podSpeed *= 0.8;
                 if (this.lives <= 0) {
@@ -471,7 +565,7 @@ class PodRacingGame {
             }
         });
     
-        // Thruster Particles (unchanged)
+        // Thruster Particles - unchanged
         const particlePositions = this.thrusterParticles.geometry.attributes.position.array as Float32Array;
         for (let i = 0; i < particlePositions.length; i += 3) {
             particlePositions[i] = this.pod.position.x - tangent.x * 3 + (this.rng() - 0.5) * 2;
@@ -480,12 +574,40 @@ class PodRacingGame {
         }
         this.thrusterParticles.geometry.attributes.position.needsUpdate = true;
     
-        // Dynamic Light (unchanged)
+        // Dynamic Light - unchanged
         this.dynamicLight.position.copy(this.pod.position);
         this.dynamicLight.intensity = 4 + Math.sin(this.survivalTime * 2) * 2;
     
+        // Progress Bar
+        const progress = (this.podDistance / trackLength) * 100;
+        const progressBar = document.getElementById("progressBar") as HTMLElement;
+        if (progressBar) {
+            progressBar.style.width = `${progress}%`;
+            progressBar.textContent = `Level ${this.scene.userData.level} - ${Math.floor(progress)}%`;
+        }
+    
         this.updateHUD();
         this.renderer.render(this.scene, this.camera);
+    }
+    
+    // New method for asteroid explosion
+    private explodeAsteroid(position: THREE.Vector3): void {
+        const explosionParticles = this.scene.userData.explosionParticles as THREE.Points;
+        const positions = explosionParticles.geometry.attributes.position.array as Float32Array;
+        for (let i = 0; i < positions.length; i += 3) {
+            positions[i] = position.x + (this.rng() - 0.5) * 10;
+            positions[i + 1] = position.y + (this.rng() - 0.5) * 10;
+            positions[i + 2] = position.z + (this.rng() - 0.5) * 10;
+        }
+        explosionParticles.geometry.attributes.position.needsUpdate = true;
+        setTimeout(() => {
+            for (let i = 0; i < positions.length; i += 3) {
+                positions[i] = position.x + (this.rng() - 0.5) * 100; // Spread out then fade
+                positions[i + 1] = position.y + (this.rng() - 0.5) * 100;
+                positions[i + 2] = position.z + (this.rng() - 0.5) * 100;
+            }
+            explosionParticles.geometry.attributes.position.needsUpdate = true;
+        }, 100);
     }
 
     private handleResize(): void {
