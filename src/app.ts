@@ -52,7 +52,7 @@ class PodRacingGame {
     private pitch: number = 0;
     private crosshair!: HTMLElement;
     private lastShotTime: number = 0;
-    private fireRate: number = 100; // Milliseconds between shots (10 shots/sec)
+    private fireRate: number = 100;
     private asteroidSpawnTimer: number = 0;
     private asteroidSpawnInterval: number = 6;
 
@@ -250,7 +250,7 @@ class PodRacingGame {
         const asteroidBaseColor = textureLoader.load('/assets/asteroid_texture.jpg');
         asteroidBaseColor.flipY = false;
         const baseAsteroidCount = 150;
-        const asteroidCount = baseAsteroidCount + Math.floor((this.level - 1) * (1350 / 99)); // 150 to 1500 over 100 levels
+        const asteroidCount = baseAsteroidCount + Math.floor((this.level - 1) * (1350 / 99));
         for (let i = 0; i < asteroidCount; i++) {
             const t = this.rng();
             const basePos = this.trackPath.getPointAt(t);
@@ -262,29 +262,13 @@ class PodRacingGame {
             const binormal = tangent.clone().cross(normal).normalize();
 
             const scaleFactor = 3 + this.rng() * 12;
-            let asteroidGeometry: THREE.BufferGeometry;
-            const shapeType = Math.floor(this.rng() * 3);
-            switch (shapeType) {
-                case 0:
-                    asteroidGeometry = new THREE.IcosahedronGeometry(4 * scaleFactor, 1);
-                    break;
-                case 1:
-                    asteroidGeometry = new THREE.DodecahedronGeometry(4 * scaleFactor);
-                    break;
-                case 2:
-                    asteroidGeometry = new THREE.OctahedronGeometry(4 * scaleFactor);
-                    break;
-                default:
-                    asteroidGeometry = new THREE.IcosahedronGeometry(4 * scaleFactor, 1);
-            }
+            const asteroidGeometry = new THREE.SphereGeometry(4 * scaleFactor, 32, 32);
             const vertices = asteroidGeometry.attributes.position.array as Float32Array;
             for (let j = 0; j < vertices.length; j += 3) {
-                const x = vertices[j];
-                const y = vertices[j + 1];
-                const z = vertices[j + 2];
-                const vertex = new THREE.Vector3(x, y, z);
-                const noise = (this.rng() - 0.5) * 2;
-                vertex.normalize().multiplyScalar(4 * scaleFactor + noise);
+                const vertex = new THREE.Vector3(vertices[j], vertices[j + 1], vertices[j + 2]);
+                const noise1 = (this.rng() - 0.5) * 2;
+                const noise2 = Math.sin(vertex.x * 0.5 + vertex.y * 0.5 + vertex.z * 0.5) * 0.5;
+                vertex.normalize().multiplyScalar(4 * scaleFactor + noise1 + noise2);
                 vertices[j] = vertex.x;
                 vertices[j + 1] = vertex.y;
                 vertices[j + 2] = vertex.z;
@@ -406,31 +390,30 @@ class PodRacingGame {
         oscillator.start();
         oscillator.stop(this.audioContext.currentTime + 0.1);
 
-        const raycaster = new THREE.Raycaster();
-        raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
-        const direction = raycaster.ray.direction.clone().normalize();
-        const startPos = this.pod.position.clone();
+        // Simplified bullet creation, aligned with original code
+        const bulletGeometry = new THREE.SphereGeometry(0.5, 16, 16);
+        const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 }); // Basic material for guaranteed visibility
+        const bulletMesh = new THREE.Mesh(bulletGeometry, bulletMaterial);
+        bulletMesh.position.copy(this.pod.position);
+        this.scene.add(bulletMesh);
 
-        const forward = new THREE.Vector3(0, 0, -1);
+        const bulletBody = new CANNON.Body({ mass: 1 });
+        bulletBody.addShape(new CANNON.Sphere(0.5));
+        bulletBody.position.copy(this.pod.position);
+
+        // Use pod's forward direction adjusted by yaw and pitch
+        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.pod.quaternion);
         const up = new THREE.Vector3(0, 1, 0);
-        const right = new THREE.Vector3(1, 0, 0);
+        const right = new THREE.Vector3().crossVectors(forward, up).normalize();
         const yawQuat = new THREE.Quaternion().setFromAxisAngle(up, this.yaw);
         const pitchQuat = new THREE.Quaternion().setFromAxisAngle(right, this.pitch);
         const shootDir = forward.clone().applyQuaternion(yawQuat).applyQuaternion(pitchQuat).normalize();
 
-        const bulletBody = new CANNON.Body({ mass: 1 });
-        bulletBody.addShape(new CANNON.Sphere(0.5));
-        bulletBody.position.copy(startPos);
         bulletBody.velocity.set(shootDir.x * 1000, shootDir.y * 1000, shootDir.z * 1000);
         this.world.addBody(bulletBody);
 
-        const bulletMesh = new THREE.Mesh(
-            new THREE.SphereGeometry(0.5, 16, 16),
-            new THREE.MeshBasicMaterial({ color: 0xffff00, emissive: 0xffff00, emissiveIntensity: 3 })
-        );
-        bulletMesh.position.copy(startPos);
-        this.scene.add(bulletMesh);
         this.bullets.push({ mesh: bulletMesh, body: bulletBody });
+        console.log("Bullet fired at:", bulletMesh.position); // Debug log
     }
 
     private updateHUD(): void {
@@ -585,6 +568,7 @@ class PodRacingGame {
                 continue;
             }
             bullet.mesh.position.copy(bullet.body.position);
+            bullet.mesh.visible = true; // Ensure visibility
 
             let bulletHit = false;
             for (let j = this.obstacles.length - 1; j >= 0; j--) {
@@ -609,6 +593,8 @@ class PodRacingGame {
                 this.scene.remove(bullet.mesh);
                 this.world.removeBody(bullet.body);
                 this.bullets.splice(i, 1);
+            } else {
+                console.log("Bullet position:", bullet.mesh.position); // Debug log
             }
         }
 
@@ -673,26 +659,13 @@ class PodRacingGame {
                 const binormal = tangent.clone().cross(normal).normalize();
 
                 const scaleFactor = 3 + this.rng() * 12;
-                let asteroidGeometry: THREE.BufferGeometry;
-                const shapeType = Math.floor(this.rng() * 3);
-                switch (shapeType) {
-                    case 0:
-                        asteroidGeometry = new THREE.IcosahedronGeometry(4 * scaleFactor, 1);
-                        break;
-                    case 1:
-                        asteroidGeometry = new THREE.DodecahedronGeometry(4 * scaleFactor);
-                        break;
-                    case 2:
-                        asteroidGeometry = new THREE.OctahedronGeometry(4 * scaleFactor);
-                        break;
-                    default:
-                        asteroidGeometry = new THREE.IcosahedronGeometry(4 * scaleFactor, 1);
-                }
+                const asteroidGeometry = new THREE.SphereGeometry(4 * scaleFactor, 32, 32);
                 const vertices = asteroidGeometry.attributes.position.array as Float32Array;
                 for (let j = 0; j < vertices.length; j += 3) {
                     const vertex = new THREE.Vector3(vertices[j], vertices[j + 1], vertices[j + 2]);
-                    const noise = (this.rng() - 0.5) * 2;
-                    vertex.normalize().multiplyScalar(4 * scaleFactor + noise);
+                    const noise1 = (this.rng() - 0.5) * 2;
+                    const noise2 = Math.sin(vertex.x * 0.5 + vertex.y * 0.5 + vertex.z * 0.5) * 0.5;
+                    vertex.normalize().multiplyScalar(4 * scaleFactor + noise1 + noise2);
                     vertices[j] = vertex.x;
                     vertices[j + 1] = vertex.y;
                     vertices[j + 2] = vertex.z;
@@ -771,26 +744,13 @@ class PodRacingGame {
         asteroidBaseColor.flipY = false;
         const newScale = scaleFactor * 0.5;
         for (let i = 0; i < 3; i++) {
-            const shapeType = Math.floor(this.rng() * 3);
-            let fragmentGeometry: THREE.BufferGeometry;
-            switch (shapeType) {
-                case 0:
-                    fragmentGeometry = new THREE.IcosahedronGeometry(4 * newScale, 1);
-                    break;
-                case 1:
-                    fragmentGeometry = new THREE.DodecahedronGeometry(4 * newScale);
-                    break;
-                case 2:
-                    fragmentGeometry = new THREE.OctahedronGeometry(4 * newScale);
-                    break;
-                default:
-                    fragmentGeometry = new THREE.IcosahedronGeometry(4 * newScale, 1);
-            }
+            const fragmentGeometry = new THREE.SphereGeometry(4 * newScale, 32, 32);
             const vertices = fragmentGeometry.attributes.position.array as Float32Array;
             for (let j = 0; j < vertices.length; j += 3) {
                 const vertex = new THREE.Vector3(vertices[j], vertices[j + 1], vertices[j + 2]);
-                const noise = (this.rng() - 0.5) * 2;
-                vertex.normalize().multiplyScalar(4 * newScale + noise);
+                const noise1 = (this.rng() - 0.5) * 2;
+                const noise2 = Math.sin(vertex.x * 0.5 + vertex.y * 0.5 + vertex.z * 0.5) * 0.5;
+                vertex.normalize().multiplyScalar(4 * newScale + noise1 + noise2);
                 vertices[j] = vertex.x;
                 vertices[j + 1] = vertex.y;
                 vertices[j + 2] = vertex.z;
