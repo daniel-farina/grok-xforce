@@ -73,6 +73,8 @@ class PodRacingGame {
     private introTime: number = 0;
     private introDuration: number = 20; // Adjust based on actual audio length
     private startButton!: HTMLElement;
+    private asteroidTexture: THREE.Texture | null = null;
+
 
     constructor() {
         this.initialize().then(() => {
@@ -89,55 +91,33 @@ class PodRacingGame {
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setClearColor(0x000000, 1);
         this.world.gravity.set(0, 0, 0);
-
+    
         this.backgroundMusic = new Audio('/assets/music.mp3');
         this.backgroundMusic.loop = true;
         this.explosionSound = new Audio('/assets/explosion.mp3');
         this.introAudio = new Audio('/assets/intro-pilot.mp3');
         this.audioContext = new AudioContext();
-
+    
         this.assignDomElements();
         this.setupInput();
-
-        this.countdownElement.style.display = "none"; // Hidden initially
+    
+        this.countdownElement.style.display = "none";
         this.crosshair.style.display = "none";
-        this.startButton.style.display = "block"; // Show start button
-
-         const loader = new GLTFLoader();
-    const asteroidData = await loader.loadAsync('/assets/asteroid/asteroid.gltf');
-    this.asteroidModel = asteroidData.scene;
-
-    // Load texture with error handling
-    const textureLoader = new THREE.TextureLoader();
-    const asteroidTexture = await new Promise<THREE.Texture>((resolve, reject) => {
-        textureLoader.load(
-            '/assets/textures/asteroid2.jpg',
-            (texture) => resolve(texture),
-            undefined,
-            (error) => {
-                console.error('Failed to load asteroid texture:', error);
-                reject(error);
-            }
-        );
-    });
-
-    // Apply material to asteroid model
-    this.asteroidModel.traverse(child => {
-        if (child instanceof THREE.Mesh) {
-            // If the GLTF has a material, enhance it; otherwise, create a new one
-            const existingMaterial = child.material as THREE.MeshStandardMaterial;
-            child.material = new THREE.MeshStandardMaterial({
-                color: 0x555555, // Dark grey base color
-                map: asteroidTexture, // Ensure texture is applied
-                metalness: 0.1, // Less metallic for a rocky feel
-                roughness: 0.9, // High roughness for matte look
-                side: THREE.DoubleSide, // Keep this if your model needs it
-                emissive: 0x000000, // Remove emissive glow (or keep low if desired)
-                emissiveIntensity: 0
-            });
-            child.material.needsUpdate = true;
-        }
-    });
+        this.startButton.style.display = "block";
+    
+        // Preload asteroid texture
+        const textureLoader = new THREE.TextureLoader();
+        this.asteroidTexture = await new Promise<THREE.Texture>((resolve, reject) => {
+            textureLoader.load(
+                '/assets/asteroid/asteroid_texture.jpg',
+                (texture) => resolve(texture),
+                undefined,
+                (error) => reject(error)
+            );
+        }).catch((error) => {
+            console.error('Failed to load asteroid texture:', error);
+            return null; // Fallback to null if loading fails
+        });
 
         this.createScene().then(() => {
             this.animate();
@@ -162,14 +142,9 @@ class PodRacingGame {
         }
         geometry.computeVertexNormals();
 
-        const textureLoader = new THREE.TextureLoader();
-        const asteroidTexture = textureLoader.load('/assets/asteroid/asteroid_texture.jpg', undefined, (error) => {
-            console.error('Failed to load asteroid texture:', error);
-        });
-
         const material = new THREE.MeshStandardMaterial({
             color: 0x333333,
-            map: asteroidTexture,
+            map: this.asteroidTexture,
             metalness: 0.1,
             roughness: 0.9,
             side: THREE.DoubleSide,
@@ -178,7 +153,7 @@ class PodRacingGame {
         });
 
         return new THREE.Mesh(geometry, material);
-    }    
+    }
 
     private assignDomElements(): void {
         this.livesCounter = document.getElementById("healthCounter") as HTMLElement;
@@ -743,41 +718,45 @@ class PodRacingGame {
         });
     
         this.asteroidSpawnTimer += deltaTime;
-        const spawnInterval = this.asteroidSpawnInterval * (1 - (this.level - 1) / 100);
-        const asteroidsToSpawn = Math.floor(this.asteroidSpawnTimer / spawnInterval);
-        if (asteroidsToSpawn > 0) {
-            for (let i = 0; i < asteroidsToSpawn; i++) {
-                const t = (this.podDistance + 500) / trackLength % 1;
-                const basePos = this.trackPath.getPointAt(t);
-                const tangent = this.trackPath.getTangentAt(t);
-                const offsetX = (this.rng() - 0.5) * 100;
-                const offsetY = (this.rng() - 0.5) * 100;
-                const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
-                const binormal = tangent.clone().cross(normal).normalize();
-    
-                const scaleFactor = 0.2 + this.rng() * 0.8;
-                const asteroid = this.asteroidModel!.clone() as THREE.Group;
-                asteroid.scale.set(scaleFactor, scaleFactor, scaleFactor);
-                asteroid.position.copy(basePos).addScaledVector(normal, offsetX).addScaledVector(binormal, offsetY);
-                this.scene.add(asteroid);
-    
-                const obstacleBody = new CANNON.Body({ mass: 1 });
-                obstacleBody.addShape(new CANNON.Box(new CANNON.Vec3(40 * scaleFactor, 40 * scaleFactor, 40 * scaleFactor)));
-                obstacleBody.position.copy(asteroid.position);
-                this.world.addBody(obstacleBody);
-    
-                // const debugSphere = new THREE.Mesh(
-                //     new THREE.BoxGeometry(80 * scaleFactor, 80 * scaleFactor, 80 * scaleFactor),
-                //     new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.3 })
-                // );
-                // debugSphere.position.copy(asteroid.position);
-                // this.scene.add(debugSphere);
-                // obstacleBody.userData = { debugMesh: debugSphere };
-    
-                this.obstacles.push({ mesh: asteroid, body: obstacleBody, isFullAsteroid: true });
-            }
-            this.asteroidSpawnTimer = this.asteroidSpawnTimer % spawnInterval;
+    const spawnInterval = this.asteroidSpawnInterval * (1 - (this.level - 1) / 100);
+    const asteroidsToSpawn = Math.floor(this.asteroidSpawnTimer / spawnInterval);
+    if (asteroidsToSpawn > 0) {
+        const trackLength = this.trackPath.getLength();
+        for (let i = 0; i < asteroidsToSpawn; i++) {
+            // Calculate spawn position ahead of the pod
+            const t = (this.podDistance + 500) / trackLength % 1;
+            const basePos = this.trackPath.getPointAt(t);
+            const tangent = this.trackPath.getTangentAt(t);
+
+            // Define offset range to spawn further from the path
+            const minOffset = 150; // Minimum distance from path
+            const maxOffset = 300; // Maximum distance from path
+            const offsetX = minOffset + this.rng() * (maxOffset - minOffset); // 150–300 units
+            const offsetY = minOffset + this.rng() * (maxOffset - minOffset); // 150–300 units
+            const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
+            const binormal = tangent.clone().cross(normal).normalize();
+
+            // Generate asteroid with random scale
+            const scaleFactor = 0.2 + this.rng() * 0.8;
+            const asteroid = this.generateAsteroid(scaleFactor);
+
+            // Position asteroid with random direction (±offset)
+            asteroid.position.copy(basePos)
+                .addScaledVector(normal, offsetX * (this.rng() < 0.5 ? 1 : -1))
+                .addScaledVector(binormal, offsetY * (this.rng() < 0.5 ? 1 : -1));
+            this.scene.add(asteroid);
+
+            // Create physics body
+            const obstacleBody = new CANNON.Body({ mass: 1 });
+            obstacleBody.addShape(new CANNON.Box(new CANNON.Vec3(40 * scaleFactor, 40 * scaleFactor, 40 * scaleFactor)));
+            obstacleBody.position.copy(asteroid.position);
+            this.world.addBody(obstacleBody);
+
+            // Add to obstacles array
+            this.obstacles.push({ mesh: asteroid, body: obstacleBody, isFullAsteroid: true });
         }
+        this.asteroidSpawnTimer = this.asteroidSpawnTimer % spawnInterval;
+    }
     
         // const particlePositions = this.thrusterParticles.geometry.attributes.position.array as Float32Array;
         // for (let i = 0; i < particlePositions.length; i += 3) {
