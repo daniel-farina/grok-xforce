@@ -65,6 +65,11 @@ class PodRacingGame {
     private asteroidSpawnTimer: number = 0;
     private asteroidSpawnInterval: number = 6;
     private asteroidModel: THREE.Group | null = null;
+    private introAudio!: HTMLAudioElement;
+    private isIntroPlaying: boolean = true;
+    private introTime: number = 0;
+    private introDuration: number = 20; // Adjust based on actual audio length
+    private startButton!: HTMLElement;
 
     constructor() {
         this.initialize().then(() => {
@@ -83,14 +88,15 @@ class PodRacingGame {
         this.backgroundMusic = new Audio('/assets/music.mp3');
         this.backgroundMusic.loop = true;
         this.explosionSound = new Audio('/assets/explosion.mp3');
+        this.introAudio = new Audio('/assets/intro-pilot.mp3');
         this.audioContext = new AudioContext();
 
         this.assignDomElements();
         this.setupInput();
 
-        this.countdownElement.textContent = "Click to start";
-        this.countdownElement.style.display = "block";
+        this.countdownElement.style.display = "none"; // Hidden initially
         this.crosshair.style.display = "none";
+        this.startButton.style.display = "block"; // Show start button
 
         const loader = new GLTFLoader();
         const asteroidData = await loader.loadAsync('/assets/asteroid/asteroid.gltf');
@@ -110,7 +116,7 @@ class PodRacingGame {
         });
 
         this.createScene().then(() => {
-            this.animate();
+            this.animate(); // Start animation loop, waiting for start button
         });
         window.addEventListener('resize', () => this.handleResize());
     }
@@ -124,6 +130,7 @@ class PodRacingGame {
         this.pauseMenu = document.getElementById("pauseMenu") as HTMLElement;
         this.resumeButton = document.getElementById("resumeButton") as HTMLElement;
         this.crosshair = document.getElementById("crosshair") as HTMLElement;
+        this.startButton = document.getElementById("startButton") as HTMLElement; // Add start button
         this.hud.appendChild(this.scoreCounter);
         this.hud.style.display = "flex";
         this.hud.style.justifyContent = "center";
@@ -165,7 +172,7 @@ class PodRacingGame {
                     break;
             }
         });
-    
+
         document.addEventListener("keyup", (event) => {
             switch (event.keyCode) {
                 case 65: this.moveRight = false; break; // A
@@ -174,7 +181,7 @@ class PodRacingGame {
                 case 83: this.moveDown = false; break; // S
             }
         });
-    
+
         document.addEventListener("mousemove", (event) => {
             if (this.isPaused || !this.raceStarted || document.pointerLockElement !== this.canvas) return;
             const yawDelta = -event.movementX * this.mouseSensitivity;
@@ -182,19 +189,30 @@ class PodRacingGame {
             this.yaw = Math.max(-Math.PI / 4, Math.min(Math.PI / 4, this.yaw + yawDelta));
             this.pitch = Math.max(-Math.PI / 6, Math.min(Math.PI / 6, this.pitch + pitchDelta));
         });
-    
+
+        this.startButton.addEventListener("click", () => {
+            this.startButton.style.display = "none"; // Hide button
+            this.isIntroPlaying = true; // Start intro
+            this.introAudio.play().catch(err => {
+                console.error("Audio playback failed:", err);
+            });
+            this.backgroundMusic.play().catch(err => {
+                console.error("Audio playback failed:", err);
+            });
+        });
+
         this.canvas.addEventListener("click", () => {
-            if (!this.isPaused && document.pointerLockElement !== this.canvas) {
+            if (!this.isPaused && document.pointerLockElement !== this.canvas && !this.isIntroPlaying) {
                 this.canvas.requestPointerLock();
             }
         });
-    
+
         this.resumeButton.addEventListener("click", () => {
             this.isPaused = false;
             this.pauseMenu.style.display = "none";
             this.canvas.requestPointerLock();
         });
-    
+
         document.addEventListener("pointerlockchange", () => {
             if (document.pointerLockElement === this.canvas) {
                 this.crosshair.style.display = "block";
@@ -423,12 +441,86 @@ class PodRacingGame {
         setTimeout(() => this.scene.remove(debugBullet), 2000);
     }
 
+
     private animate(): void {
         requestAnimationFrame(() => this.animate());
         if (this.isPaused) return;
 
         this.world.step(1 / 60);
         const deltaTime = 1 / 60;
+
+        if (this.startButton.style.display !== "none") {
+            // Render initial view while waiting for start
+            const startPos = this.trackPath.getPointAt(0);
+            this.camera.position.copy(startPos);
+            const startTangent = this.trackPath.getTangentAt(0).negate();
+            this.camera.lookAt(startPos.clone().add(startTangent));
+            this.renderer.render(this.scene, this.camera);
+            return;
+        }
+
+        if (this.isIntroPlaying) {
+            this.introTime += deltaTime;
+            const angle = (this.introTime / (this.introDuration * 5)) * 2 * Math.PI; // 5x slower
+            const radius = 20;
+            const podPos = this.pod.position;
+
+            this.camera.position.set(
+                podPos.x + radius * Math.cos(angle),
+                podPos.y + 5,
+                podPos.z + radius * Math.sin(angle)
+            );
+            this.camera.lookAt(podPos);
+
+            this.renderer.render(this.scene, this.camera);
+
+            if (this.introTime >= this.introDuration || this.introAudio.ended) {
+                this.isIntroPlaying = false;
+                this.introTime = 0;
+                this.countdownElement.textContent = "Click to start";
+                this.countdownElement.style.display = "block";
+            }
+            return;
+        }
+
+        if (this.introTime < 1 && !this.raceStarted && this.countdownElement.textContent === "Click to start") {
+            this.introTime += deltaTime * 2;
+            const t = this.podDistance / this.trackPath.getLength();
+            const tangent = this.trackPath.getTangentAt(t);
+            const targetPos = this.pod.position.clone().addScaledVector(tangent, -2);
+            const startPos = this.camera.position.clone();
+
+            this.camera.position.lerpVectors(startPos, targetPos, this.introTime);
+            this.camera.lookAt(this.pod.position);
+
+            this.renderer.render(this.scene, this.camera);
+            return;
+        }
+
+        if (!this.raceStarted) {
+            if (this.countdownElement.textContent === "Click to start") {
+                const startPos = this.trackPath.getPointAt(0);
+                this.camera.position.copy(startPos);
+                const startTangent = this.trackPath.getTangentAt(0).negate();
+                this.camera.lookAt(startPos.clone().add(startTangent));
+                this.renderer.render(this.scene, this.camera);
+                return;
+            }
+
+            this.countdownTimer += deltaTime;
+            const timeLeft = Math.max(0, this.countdown - this.countdownTimer);
+            this.countdownElement.textContent = timeLeft > 0 ? `Race starts in ${Math.ceil(timeLeft)}...` : "Go!";
+            if (timeLeft <= 0) {
+                this.raceStarted = true;
+                this.countdownElement.style.display = "none";
+            }
+            const startPos = this.trackPath.getPointAt(0);
+            this.camera.position.copy(startPos);
+            const startTangent = this.trackPath.getTangentAt(0).negate();
+            this.camera.lookAt(startPos.clone().add(startTangent));
+            this.renderer.render(this.scene, this.camera);
+            return;
+        }
 
         if (!this.raceStarted) {
             if (this.countdownElement.textContent === "Click to start") {
