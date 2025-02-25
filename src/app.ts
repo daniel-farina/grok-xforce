@@ -24,6 +24,8 @@ class PodRacingGame {
     private obstacles: { mesh: THREE.Group | THREE.Mesh; body: CANNON.Body; velocity?: CANNON.Vec3; isFullAsteroid: boolean }[] = [];
     private speedBoosts: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
     private bullets: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
+    private enemyShips: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
+    private enemyBullets: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
     private trackPath!: THREE.CatmullRomCurve3;
     private pathLine!: THREE.Line;
     private rng: () => number = Math.random;
@@ -54,7 +56,8 @@ class PodRacingGame {
     private thrusterParticles!: THREE.Points;
     private dynamicLight!: THREE.PointLight;
     private level: number = 1;
-    private backgroundMusic!: HTMLAudioElement;
+    private songs: HTMLAudioElement[] = [];
+    private currentSongIndex: number = 0;
     private explosionSound!: HTMLAudioElement;
     private audioContext!: AudioContext;
     private mouseSensitivity: number = 0.002;
@@ -65,6 +68,10 @@ class PodRacingGame {
     private fireRate: number = 100;
     private asteroidSpawnTimer: number = 0;
     private asteroidSpawnInterval: number = 6;
+    private enemySpawnTimer: number = 0;
+    private enemySpawnInterval: number = 20;
+    private enemySpawnsThisLevel: number = 0;
+    private maxEnemySpawnsPerLevel: number = 4;
     private asteroidModel: THREE.Group | null = null;
     private introAudio!: HTMLAudioElement;
     private isIntroPlaying: boolean = true;
@@ -72,17 +79,27 @@ class PodRacingGame {
     private introDuration: number = 20;
     private startButton!: HTMLElement;
     private asteroidTexture: THREE.Texture | null = null;
-    private fog!: THREE.Fog;
-    private fogZones: { start: number; end: number }[] = [
-        { start: 0.01, end: 0.4 },
-        { start: 0.6, end: 0.8 }
-    ];
     private earth!: THREE.Mesh;
     private mars!: THREE.Mesh;
     private moon!: THREE.Mesh;
     private earthAtmosphere!: THREE.Mesh;
     private moonOrbitRadius: number = 2000;
     private moonOrbitAngle: number = 0;
+    private showPathLine: boolean = false;
+    private alertSounds: HTMLAudioElement[] = [];
+    private lastAlertTime: number = 0;
+    private alertCooldown: number = 1;
+    private alertsThisLevel: number = 0;
+    private maxAlertsPerLevel: number = 3;
+    private enemySpawnDistance: number = 900;
+    private enemyLateralOffset: number = 200;
+    private enemyBaseSpeed: number = 25;
+    private enemyFireRate: number = 1000;
+    private enemyBulletSpeed: number = 500;
+    private lastEnemyShotTimes: Map<CANNON.Body, number> = new Map();
+    private enemyShotCounts: Map<CANNON.Body, number> = new Map();
+    private enemyHits: Map<CANNON.Body, number> = new Map();
+    private shotsToLoseLife: number = 10;
 
     constructor() {
         this.initialize().then(() => {
@@ -98,14 +115,30 @@ class PodRacingGame {
         this.renderer.setClearColor(0x000000, 1);
         this.world.gravity.set(0, 0, 0);
 
-        this.backgroundMusic = new Audio('/assets/music.mp3');
-        this.backgroundMusic.loop = true;
+        this.songs = [
+            new Audio('/assets/music1.mp3'),
+            new Audio('/assets/music2.mp3'),
+            new Audio('/assets/music3.mp3')
+        ];
+        this.songs.forEach(song => {
+            song.addEventListener('ended', () => {
+                this.currentSongIndex = (this.currentSongIndex + 1) % this.songs.length;
+                this.songs[this.currentSongIndex].play().catch(err => console.error("Song playback failed:", err));
+            });
+        });
+
         this.explosionSound = new Audio('/assets/explosion.mp3');
         this.introAudio = new Audio('/assets/intro-pilot.mp3');
+        this.alertSounds = [
+            new Audio('/assets/alert1.mp3'),
+            new Audio('/assets/alert2.mp3'),
+            new Audio('/assets/alert3.mp3')
+        ];
         this.audioContext = new AudioContext();
 
         this.assignDomElements();
         this.setupInput();
+        this.setupControls();
 
         this.countdownElement.style.display = "none";
         this.crosshair.style.display = "none";
@@ -128,6 +161,65 @@ class PodRacingGame {
             this.animate();
         });
         window.addEventListener('resize', () => this.handleResize());
+    }
+
+    private setupControls(): void {
+        const spawnDistanceSlider = document.getElementById("spawnDistance") as HTMLInputElement | null;
+        const lateralOffsetSlider = document.getElementById("lateralOffset") as HTMLInputElement | null;
+        const baseSpeedSlider = document.getElementById("baseSpeed") as HTMLInputElement | null;
+        const fireRateSlider = document.getElementById("fireRate") as HTMLInputElement | null;
+        const bulletSpeedSlider = document.getElementById("bulletSpeed") as HTMLInputElement | null;
+
+        const spawnDistanceValue = document.getElementById("spawnDistanceValue") as HTMLSpanElement | null;
+        const lateralOffsetValue = document.getElementById("lateralOffsetValue") as HTMLSpanElement | null;
+        const baseSpeedValue = document.getElementById("baseSpeedValue") as HTMLSpanElement | null;
+        const fireRateValue = document.getElementById("fireRateValue") as HTMLSpanElement | null;
+        const bulletSpeedValue = document.getElementById("bulletSpeedValue") as HTMLSpanElement | null;
+
+        if (spawnDistanceSlider && spawnDistanceValue) {
+            spawnDistanceSlider.addEventListener("input", () => {
+                this.enemySpawnDistance = parseInt(spawnDistanceSlider.value);
+                spawnDistanceValue.textContent = this.enemySpawnDistance.toString();
+            });
+        } else {
+            console.error("Spawn Distance controls not found in DOM");
+        }
+
+        if (lateralOffsetSlider && lateralOffsetValue) {
+            lateralOffsetSlider.addEventListener("input", () => {
+                this.enemyLateralOffset = parseInt(lateralOffsetSlider.value);
+                lateralOffsetValue.textContent = this.enemyLateralOffset.toString();
+            });
+        } else {
+            console.error("Lateral Offset controls not found in DOM");
+        }
+
+        if (baseSpeedSlider && baseSpeedValue) {
+            baseSpeedSlider.addEventListener("input", () => {
+                this.enemyBaseSpeed = parseInt(baseSpeedSlider.value);
+                baseSpeedValue.textContent = this.enemyBaseSpeed.toString();
+            });
+        } else {
+            console.error("Base Speed controls not found in DOM");
+        }
+
+        if (fireRateSlider && fireRateValue) {
+            fireRateSlider.addEventListener("input", () => {
+                this.enemyFireRate = parseInt(fireRateSlider.value);
+                fireRateValue.textContent = this.enemyFireRate.toString();
+            });
+        } else {
+            console.error("Fire Rate controls not found in DOM");
+        }
+
+        if (bulletSpeedSlider && bulletSpeedValue) {
+            bulletSpeedSlider.addEventListener("input", () => {
+                this.enemyBulletSpeed = parseInt(bulletSpeedSlider.value);
+                bulletSpeedValue.textContent = this.enemyBulletSpeed.toString();
+            });
+        } else {
+            console.error("Bullet Speed controls not found in DOM");
+        }
     }
 
     private generateAsteroid(scaleFactor: number): THREE.Mesh {
@@ -186,19 +278,61 @@ class PodRacingGame {
         this.updateHUD();
     }
 
+    private shootBullet(): void {
+        const currentTime = performance.now();
+        if (currentTime - this.lastShotTime < this.fireRate) return;
+        this.lastShotTime = currentTime;
+
+        const oscillator = this.audioContext.createOscillator();
+        const gainNode = this.audioContext.createGain();
+        oscillator.type = 'square';
+        oscillator.frequency.setValueAtTime(600, this.audioContext.currentTime);
+        oscillator.frequency.exponentialRampToValueAtTime(300, this.audioContext.currentTime + 0.05);
+        gainNode.gain.setValueAtTime(0.3, this.audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.1);
+        oscillator.connect(gainNode);
+        gainNode.connect(this.audioContext.destination);
+        oscillator.start();
+        oscillator.stop(this.audioContext.currentTime + 0.1);
+
+        const bulletGeometry = new THREE.SphereGeometry(1, 16, 16);
+        const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00, emissive: 0xffff00, emissiveIntensity: 3 });
+        const bulletMesh = new THREE.Mesh(bulletGeometry, bulletMaterial);
+
+        const spawnOffset = new THREE.Vector3(0, 0, -3).applyQuaternion(this.pod.quaternion);
+        bulletMesh.position.copy(this.pod.position).add(spawnOffset);
+        this.scene.add(bulletMesh);
+
+        const bulletBody = new CANNON.Body({ mass: 1 });
+        bulletBody.addShape(new CANNON.Sphere(1));
+        bulletBody.position.copy(bulletMesh.position);
+        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.pod.quaternion).normalize();
+        bulletBody.velocity.set(forward.x * 1000, forward.y * 1000, forward.z * 1000);
+        this.world.addBody(bulletBody);
+
+        this.bullets.push({ mesh: bulletMesh, body: bulletBody });
+    }
+
     private setupInput(): void {
         document.addEventListener("keydown", (event) => {
             if (this.isPaused) return;
             switch (event.keyCode) {
-                case 65: this.moveRight = true; break;
-                case 68: this.moveLeft = true; break;
-                case 87: this.moveUp = true; break;
-                case 83: this.moveDown = true; break;
+                case 65: this.moveRight = true; break; // A
+                case 68: this.moveLeft = true; break; // D
+                case 87: this.moveUp = true; break; // W
+                case 83: this.moveDown = true; break; // S
                 case 32:
                     if (this.raceStarted) this.shootBullet();
                     break;
                 case 67:
                     this.cameraMode = (this.cameraMode + 1) % 3;
+                    break;
+                case 76: // L key
+                    this.showPathLine = !this.showPathLine;
+                    this.pathLine.visible = this.showPathLine;
+                    break;
+                case 80: // P key
+                    this.spawnEnemyShip();
                     break;
                 case 27:
                     this.isPaused = !this.isPaused;
@@ -232,12 +366,8 @@ class PodRacingGame {
         this.startButton.addEventListener("click", () => {
             this.startButton.style.display = "none";
             this.isIntroPlaying = true;
-            this.introAudio.play().catch(err => {
-                console.error("Audio playback failed:", err);
-            });
-            this.backgroundMusic.play().catch(err => {
-                console.error("Audio playback failed:", err);
-            });
+            this.introAudio.play().catch(err => console.error("Audio playback failed:", err));
+            this.songs[this.currentSongIndex].play().catch(err => console.error("Song playback failed:", err));
         });
 
         this.canvas.addEventListener("click", () => {
@@ -270,6 +400,32 @@ class PodRacingGame {
         this.raceStarted = false;
         this.countdownElement.textContent = `Race starts in ${this.countdown}...`;
         this.countdownElement.style.display = "block";
+    }
+
+    private spawnEnemyShip(): void {
+        const enemyGeometry = new THREE.SphereGeometry(7, 16, 16);
+        const enemyMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+        const enemyMesh = new THREE.Mesh(enemyGeometry, enemyMaterial);
+
+        const t = (this.podDistance + this.enemySpawnDistance) / this.trackPath.getLength() % 1;
+        const basePos = this.trackPath.getPointAt(t);
+        const tangent = this.trackPath.getTangentAt(t);
+        const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
+        const binormal = tangent.clone().cross(normal).normalize();
+        enemyMesh.position.copy(basePos)
+            .addScaledVector(normal, (this.rng() - 0.5) * this.enemyLateralOffset)
+            .addScaledVector(binormal, (this.rng() - 0.5) * this.enemyLateralOffset);
+        this.scene.add(enemyMesh);
+
+        const enemyBody = new CANNON.Body({ mass: 1 });
+        enemyBody.addShape(new CANNON.Sphere(7));
+        enemyBody.position.copy(enemyMesh.position);
+        this.world.addBody(enemyBody);
+
+        this.enemyShips.push({ mesh: enemyMesh, body: enemyBody });
+        this.enemyShotCounts.set(enemyBody, 0);
+        this.enemyHits.set(enemyBody, 0);
+        this.enemySpawnsThisLevel++;
     }
 
     private async createScene(): Promise<void> {
@@ -326,6 +482,7 @@ class PodRacingGame {
         const pathGeometry = new THREE.BufferGeometry().setFromPoints(pathPoints);
         const pathMaterial = new THREE.LineBasicMaterial({ color: 0x00ffff, emissive: 0x00ffff, linewidth: 5, emissiveIntensity: 2 });
         this.pathLine = new THREE.Line(pathGeometry, pathMaterial);
+        this.pathLine.visible = this.showPathLine;
         this.scene.add(this.pathLine);
 
         const baseAsteroidCount = 150;
@@ -387,8 +544,6 @@ class PodRacingGame {
         const stars = new THREE.Points(starGeometry, starMaterial);
         this.scene.add(stars);
 
-        this.fog = new THREE.Fog(0x8899aa, 50, 500); // Lighter bluish-gray fog
-
         const textureLoader = new THREE.TextureLoader();
         const earthGeometry = new THREE.SphereGeometry(1000, 32, 32);
         const earthMaterial = new THREE.MeshStandardMaterial({ map: textureLoader.load('/assets/textures/earth.jpg') });
@@ -421,7 +576,7 @@ class PodRacingGame {
 
         this.scene.userData = { earth: this.earth, moon: this.moon, mars: this.mars };
 
-        const ambientLight = new THREE.AmbientLight(0xddddbb, 6); // Slightly warm ambient
+        const ambientLight = new THREE.AmbientLight(0xddddbb, 6);
         this.scene.add(ambientLight);
 
         const directionalLight = new THREE.DirectionalLight(0xffffff, 3);
@@ -429,48 +584,61 @@ class PodRacingGame {
         directionalLight.castShadow = true;
         this.scene.add(directionalLight);
 
-        const sunLight = new THREE.DirectionalLight(0xffffff, 5); // Sunlight
-        sunLight.position.set(10000, 10000, 10000); // Far away
+        const sunLight = new THREE.DirectionalLight(0xffffff, 8);
+        sunLight.position.set(10000, 10000, 10000);
         sunLight.castShadow = true;
         this.scene.add(sunLight);
 
+        const sunSpotLight = new THREE.SpotLight(0xffffaa, 10, 30000, Math.PI / 4, 0.3);
+        sunSpotLight.position.copy(sunLight.position);
+        sunSpotLight.target.position.set(0, 0, 0);
+        this.scene.add(sunSpotLight);
+        this.scene.add(sunSpotLight.target);
+
+        const sunGeometry = new THREE.SphereGeometry(100, 32, 32);
+        const sunMaterial = new THREE.MeshBasicMaterial({ 
+            color: 0xffffaa, 
+            emissive: 0xffffaa, 
+            emissiveIntensity: 2 
+        });
+        const sun = new THREE.Mesh(sunGeometry, sunMaterial);
+        sun.position.copy(sunLight.position);
+        this.scene.add(sun);
+
+        const glareTexture = new THREE.TextureLoader().load('/assets/textures/glare.png', undefined, undefined, () => {
+            console.error("Glare texture not found, using fallback");
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d')!;
+            const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+            gradient.addColorStop(0, 'rgba(255, 255, 170, 1)');
+            gradient.addColorStop(1, 'rgba(255, 255, 170, 0)');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 64, 64);
+            return new THREE.CanvasTexture(canvas);
+        });
+        const glareMaterial = new THREE.SpriteMaterial({
+            map: glareTexture,
+            color: 0xffffaa,
+            transparent: true,
+            opacity: 0.9,
+            blending: THREE.AdditiveBlending
+        });
+        const glareSprite = new THREE.Sprite(glareMaterial);
+        glareSprite.scale.set(1000, 1000, 1);
+        glareSprite.position.copy(sunLight.position);
+        this.scene.add(glareSprite);
+
+        const particleGeometry = new THREE.BufferGeometry();
+        const particleCount = 50;
+        const particlePositions = new Float32Array(particleCount * 3);
+        particleGeometry.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
+        const particleMaterial = new THREE.PointsMaterial({ color: 0xff0000, size: 2, transparent: true });
+        this.thrusterParticles = new THREE.Points(particleGeometry, particleMaterial);
+
         this.dynamicLight = new THREE.PointLight(0xffffff, 5, 20000);
         this.scene.add(this.dynamicLight);
-    }
-
-    private shootBullet(): void {
-        const currentTime = performance.now();
-        if (currentTime - this.lastShotTime < this.fireRate) return;
-        this.lastShotTime = currentTime;
-
-        const oscillator = this.audioContext.createOscillator();
-        const gainNode = this.audioContext.createGain();
-        oscillator.type = 'square';
-        oscillator.frequency.setValueAtTime(600, this.audioContext.currentTime);
-        oscillator.frequency.exponentialRampToValueAtTime(300, this.audioContext.currentTime + 0.05);
-        gainNode.gain.setValueAtTime(0.3, this.audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.1);
-        oscillator.connect(gainNode);
-        gainNode.connect(this.audioContext.destination);
-        oscillator.start();
-        oscillator.stop(this.audioContext.currentTime + 0.1);
-
-        const bulletGeometry = new THREE.SphereGeometry(1, 16, 16);
-        const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00, emissive: 0xffff00, emissiveIntensity: 3 });
-        const bulletMesh = new THREE.Mesh(bulletGeometry, bulletMaterial);
-
-        const spawnOffset = new THREE.Vector3(0, 0, -3).applyQuaternion(this.pod.quaternion);
-        bulletMesh.position.copy(this.pod.position).add(spawnOffset);
-        this.scene.add(bulletMesh);
-
-        const bulletBody = new CANNON.Body({ mass: 1 });
-        bulletBody.addShape(new CANNON.Sphere(1));
-        bulletBody.position.copy(bulletMesh.position);
-        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.pod.quaternion).normalize();
-        bulletBody.velocity.set(forward.x * 1000, forward.y * 1000, forward.z * 1000);
-        this.world.addBody(bulletBody);
-
-        this.bullets.push({ mesh: bulletMesh, body: bulletBody });
     }
 
     private animate(): void {
@@ -567,10 +735,26 @@ class PodRacingGame {
                 this.scene.remove(b.mesh);
                 this.world.removeBody(b.body);
             });
+            this.enemyShips.forEach(enemy => {
+                this.scene.remove(enemy.mesh);
+                this.world.removeBody(enemy.body);
+            });
+            this.enemyBullets.forEach(bullet => {
+                this.scene.remove(bullet.mesh);
+                this.world.removeBody(bullet.body);
+            });
             this.obstacles = [];
             this.speedBoosts = [];
             this.bullets = [];
+            this.enemyShips = [];
+            this.enemyBullets = [];
+            this.lastEnemyShotTimes.clear();
+            this.enemyShotCounts.clear();
+            this.enemyHits.clear();
+            this.enemySpawnsThisLevel = 0;
+            this.alertsThisLevel = 0;
             this.createScene();
+            this.pathLine.visible = this.showPathLine;
         }
 
         const t = this.podDistance / trackLength;
@@ -611,6 +795,18 @@ class PodRacingGame {
         if (!this.moveLeft && !this.moveRight) this.podOffsetX *= 0.9;
         if (!this.moveUp && !this.moveDown) this.podOffsetY *= 0.9;
 
+        const tNext = Math.min(t + 0.01, 1);
+        const tangentNext = this.trackPath.getTangentAt(tNext);
+        const curvature = tangent.distanceTo(tangentNext) / 0.01;
+        const currentTime = performance.now() / 1000;
+        if (curvature > 0.1 && currentTime - this.lastAlertTime > this.alertCooldown && this.alertsThisLevel < this.maxAlertsPerLevel) {
+            this.alertSounds.forEach((sound, index) => {
+                setTimeout(() => sound.play().catch(err => console.error("Alert playback failed:", err)), index * 500);
+            });
+            this.lastAlertTime = currentTime;
+            this.alertsThisLevel++;
+        }
+
         switch (this.cameraMode) {
             case 0:
                 this.camera.position.copy(this.pod.position).addScaledVector(tangent, -2);
@@ -625,15 +821,6 @@ class PodRacingGame {
                 this.camera.lookAt(new THREE.Vector3(0, 0, 0));
                 break;
         }
-
-        let inFogZone = false;
-        for (const zone of this.fogZones) {
-            if (t >= zone.start && t <= zone.end) {
-                inFogZone = true;
-                break;
-            }
-        }
-        this.scene.fog = inFogZone ? this.fog : null;
 
         this.earth.rotation.y += 0.001;
         this.mars.rotation.y += 0.0009;
@@ -658,7 +845,7 @@ class PodRacingGame {
             }
 
             const aggressionFactor = Math.min(this.level / 100, 1);
-            if (this.rng() < aggressionFactor * 0.1) {
+            if (this.rng() < aggressionFactor * 0.12) {
                 const directionToPod = this.pod.position.clone().sub(obstacle.mesh.position).normalize();
                 obstacle.body.velocity.set(directionToPod.x * 30 * aggressionFactor, directionToPod.y * 30 * aggressionFactor, directionToPod.z * 30 * aggressionFactor);
             }
@@ -772,6 +959,153 @@ class PodRacingGame {
                 this.obstacles.push({ mesh: asteroid, body: obstacleBody, isFullAsteroid: true });
             }
             this.asteroidSpawnTimer = this.asteroidSpawnTimer % spawnInterval;
+        }
+
+        this.enemySpawnTimer += deltaTime;
+        if (this.enemySpawnTimer > this.enemySpawnInterval && this.enemySpawnsThisLevel < this.maxEnemySpawnsPerLevel) {
+            if (this.rng() < 0.1) {
+                this.spawnEnemyShip();
+            }
+            this.enemySpawnTimer = 0;
+        }
+
+        for (let i = this.enemyShips.length - 1; i >= 0; i--) {
+            const enemy = this.enemyShips[i];
+            enemy.mesh.position.copy(enemy.body.position);
+
+            const distanceToPod = enemy.mesh.position.distanceTo(this.pod.position);
+            const speed = this.enemyBaseSpeed * (1 + (this.enemySpawnDistance - distanceToPod) / this.enemySpawnDistance);
+            const directionToPod = this.pod.position.clone().sub(enemy.mesh.position).normalize();
+            const erraticFactor = this.level * 0.1;
+            const erraticOffset = new THREE.Vector3(
+                (this.rng() - 0.5) * erraticFactor,
+                (this.rng() - 0.5) * erraticFactor,
+                (this.rng() - 0.5) * erraticFactor
+            );
+            directionToPod.add(erraticOffset).normalize();
+            enemy.body.velocity.set(directionToPod.x * speed, directionToPod.y * speed, directionToPod.z * speed);
+
+            const currentTime = performance.now();
+            const lastShotTime = this.lastEnemyShotTimes.get(enemy.body) || 0;
+            let shotsFired = this.enemyShotCounts.get(enemy.body) || 0;
+            if (currentTime - lastShotTime > this.enemyFireRate && shotsFired < this.shotsToLoseLife) {
+                const bulletGeometry = new THREE.SphereGeometry(1, 8, 8);
+                const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+                const bulletMesh = new THREE.Mesh(bulletGeometry, bulletMaterial);
+                bulletMesh.position.copy(enemy.mesh.position).add(directionToPod.clone().multiplyScalar(8));
+                this.scene.add(bulletMesh);
+
+                const bulletBody = new CANNON.Body({ mass: 1 });
+                bulletBody.addShape(new CANNON.Sphere(1));
+                bulletBody.position.copy(bulletMesh.position);
+                bulletBody.velocity.set(directionToPod.x * this.enemyBulletSpeed, directionToPod.y * this.enemyBulletSpeed, directionToPod.z * this.enemyBulletSpeed);
+                this.world.addBody(bulletBody);
+
+                this.enemyBullets.push({ mesh: bulletMesh, body: bulletBody });
+                this.lastEnemyShotTimes.set(enemy.body, currentTime);
+                shotsFired++;
+                this.enemyShotCounts.set(enemy.body, shotsFired);
+
+                if (shotsFired >= this.shotsToLoseLife) {
+                    this.scene.remove(enemy.mesh);
+                    this.world.removeBody(enemy.body);
+                    this.lastEnemyShotTimes.delete(enemy.body);
+                    this.enemyHits.delete(enemy.body);
+                    this.enemyShotCounts.delete(enemy.body);
+                    this.enemyShips.splice(i, 1);
+                    continue;
+                }
+            }
+
+            for (let j = this.bullets.length - 1; j >= 0; j--) {
+                const bullet = this.bullets[j];
+                if (bullet.mesh.position.distanceTo(enemy.mesh.position) < 8) {
+                    this.explosionSound.play();
+                    this.scene.add(this.thrusterParticles);
+                    const particlePositions = this.thrusterParticles.geometry.attributes.position.array as Float32Array;
+                    for (let k = 0; k < particlePositions.length; k += 3) {
+                        particlePositions[k] = enemy.mesh.position.x + (this.rng() - 0.5) * 10;
+                        particlePositions[k + 1] = enemy.mesh.position.y + (this.rng() - 0.5) * 10;
+                        particlePositions[k + 2] = enemy.mesh.position.z + (this.rng() - 0.5) * 10;
+                    }
+                    this.thrusterParticles.geometry.attributes.position.needsUpdate = true;
+                    setTimeout(() => this.scene.remove(this.thrusterParticles), 500);
+
+                    this.scene.remove(enemy.mesh);
+                    this.world.removeBody(enemy.body);
+                    this.lastEnemyShotTimes.delete(enemy.body);
+                    this.enemyHits.delete(enemy.body);
+                    this.enemyShotCounts.delete(enemy.body);
+                    this.enemyShips.splice(i, 1);
+                    this.scene.remove(bullet.mesh);
+                    this.world.removeBody(bullet.body);
+                    this.bullets.splice(j, 1);
+                    this.score += 100;
+                    break;
+                }
+            }
+
+            if (distanceToPod < 12) {
+                this.lives -= 2;
+                this.scene.remove(enemy.mesh);
+                this.world.removeBody(enemy.body);
+                this.lastEnemyShotTimes.delete(enemy.body);
+                this.enemyHits.delete(enemy.body);
+                this.enemyShotCounts.delete(enemy.body);
+                this.enemyShips.splice(i, 1);
+                if (this.lives <= 0) {
+                    this.isPaused = true;
+                    this.pauseMenu.style.display = "block";
+                    alert(`Game Over! Final Score: ${Math.floor(this.score)}`);
+                }
+            } else if (distanceToPod > 1000 && shotsFired < this.shotsToLoseLife) {
+                this.lives -= 1;
+                this.scene.remove(enemy.mesh);
+                this.world.removeBody(enemy.body);
+                this.lastEnemyShotTimes.delete(enemy.body);
+                this.enemyHits.delete(enemy.body);
+                this.enemyShotCounts.delete(enemy.body);
+                this.enemyShips.splice(i, 1);
+                if (this.lives <= 0) {
+                    this.isPaused = true;
+                    this.pauseMenu.style.display = "block";
+                    alert(`Game Over! Final Score: ${Math.floor(this.score)}`);
+                }
+            }
+        }
+
+        for (let i = this.enemyBullets.length - 1; i >= 0; i--) {
+            const bullet = this.enemyBullets[i];
+            bullet.mesh.position.copy(bullet.body.position);
+
+            let firingEnemy: CANNON.Body | undefined;
+            for (const enemy of this.enemyShips) {
+                if (bullet.body.position.distanceTo(enemy.body.position) < 100) {
+                    firingEnemy = enemy.body;
+                    break;
+                }
+            }
+
+            if (bullet.mesh.position.distanceTo(this.pod.position) < 5 && firingEnemy) {
+                let hits = (this.enemyHits.get(firingEnemy) || 0) + 1;
+                this.enemyHits.set(firingEnemy, hits);
+                if (hits >= this.shotsToLoseLife) {
+                    this.lives -= 1;
+                    this.enemyHits.set(firingEnemy, 0);
+                    if (this.lives <= 0) {
+                        this.isPaused = true;
+                        this.pauseMenu.style.display = "block";
+                        alert(`Game Over! Final Score: ${Math.floor(this.score)}`);
+                    }
+                }
+                this.scene.remove(bullet.mesh);
+                this.world.removeBody(bullet.body);
+                this.enemyBullets.splice(i, 1);
+            } else if (bullet.mesh.position.length() > 20000) {
+                this.scene.remove(bullet.mesh);
+                this.world.removeBody(bullet.body);
+                this.enemyBullets.splice(i, 1);
+            }
         }
 
         if (this.dynamicLight) {
