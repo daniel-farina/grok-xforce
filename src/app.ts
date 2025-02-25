@@ -13,6 +13,13 @@ declare module 'cannon-es' {
     }
 }
 
+interface ExplosionInstance {
+    particles: THREE.Points;
+    velocities: THREE.Vector3[];
+    lifetimes: number[];
+    duration: number;
+}
+
 class PodRacingGame {
     private scene: THREE.Scene = new THREE.Scene();
     private camera: THREE.PerspectiveCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 20000);
@@ -54,6 +61,7 @@ class PodRacingGame {
     private pauseMenu!: HTMLElement;
     private resumeButton!: HTMLElement;
     private thrusterParticles!: THREE.Points;
+    private explosionInstances: ExplosionInstance[] = [];
     private dynamicLight!: THREE.PointLight;
     private level: number = 1;
     private songs: HTMLAudioElement[] = [];
@@ -69,9 +77,9 @@ class PodRacingGame {
     private asteroidSpawnTimer: number = 0;
     private asteroidSpawnInterval: number = 6;
     private enemySpawnTimer: number = 0;
-    private enemySpawnInterval: number = 20;
+    private enemySpawnInterval: number = 20 / 3; // Reduced by 3x for more frequent spawns
     private enemySpawnsThisLevel: number = 0;
-    private maxEnemySpawnsPerLevel: number = 4;
+    private maxEnemySpawnsPerLevel: number = 12; // Increased from 4 to 12 (3x)
     private asteroidModel: THREE.Group | null = null;
     private introAudio!: HTMLAudioElement;
     private isIntroPlaying: boolean = true;
@@ -79,6 +87,7 @@ class PodRacingGame {
     private introDuration: number = 20;
     private startButton!: HTMLElement;
     private asteroidTexture: THREE.Texture | null = null;
+    private metalTexture: THREE.Texture | null = null;
     private earth!: THREE.Mesh;
     private mars!: THREE.Mesh;
     private moon!: THREE.Mesh;
@@ -154,6 +163,18 @@ class PodRacingGame {
             );
         }).catch((error) => {
             console.error('Failed to load asteroid texture:', error);
+            return null;
+        });
+
+        this.metalTexture = await new Promise<THREE.Texture>((resolve, reject) => {
+            textureLoader.load(
+                '/assets/metal.png',
+                (texture) => resolve(texture),
+                undefined,
+                (error) => reject(error)
+            );
+        }).catch((error) => {
+            console.error('Failed to load metal texture:', error);
             return null;
         });
 
@@ -321,8 +342,16 @@ class PodRacingGame {
                 case 68: this.moveLeft = true; break; // D
                 case 87: this.moveUp = true; break; // W
                 case 83: this.moveDown = true; break; // S
-                case 32:
-                    if (this.raceStarted) this.shootBullet();
+                case 32: // Spacebar
+                    if (this.isIntroPlaying) {
+                        this.isIntroPlaying = false; // Skip intro
+                        this.introAudio.pause();
+                        this.introTime = 0;
+                        this.countdownTimer = 0;
+                        this.countdownElement.style.display = "block";
+                    } else if (this.raceStarted) {
+                        this.shootBullet();
+                    }
                     break;
                 case 67:
                     this.cameraMode = (this.cameraMode + 1) % 3;
@@ -398,31 +427,49 @@ class PodRacingGame {
     private startCountdown(): void {
         this.countdownTimer = 0;
         this.raceStarted = false;
-        this.countdownElement.textContent = `Race starts in ${this.countdown}...`;
+        this.countdownElement.textContent = `${this.countdown}`;
         this.countdownElement.style.display = "block";
     }
 
     private spawnEnemyShip(): void {
-        const enemyGeometry = new THREE.SphereGeometry(7, 16, 16);
-        const enemyMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-        const enemyMesh = new THREE.Mesh(enemyGeometry, enemyMaterial);
+        const enemyGroup = new THREE.Group();
+        const bodyGeometry = new THREE.SphereGeometry(7, 16, 16);
+        const bodyMaterial = new THREE.MeshStandardMaterial({
+            map: this.metalTexture,
+            metalness: 0.8,
+            roughness: 0.4
+        });
+        const bodyMesh = new THREE.Mesh(bodyGeometry, bodyMaterial);
+        enemyGroup.add(bodyMesh);
+
+        const windowGeometry = new THREE.SphereGeometry(2, 16, 16);
+        const windowMaterial = new THREE.MeshStandardMaterial({
+            color: 0x87ceeb,
+            metalness: 0.9,
+            roughness: 0.1
+        });
+        const windowMesh = new THREE.Mesh(windowGeometry, windowMaterial);
+        windowMesh.scale.z = 0.2;
+        windowMesh.position.set(0, 0, 7);
+        enemyGroup.add(windowMesh);
 
         const t = (this.podDistance + this.enemySpawnDistance) / this.trackPath.getLength() % 1;
         const basePos = this.trackPath.getPointAt(t);
         const tangent = this.trackPath.getTangentAt(t);
         const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
         const binormal = tangent.clone().cross(normal).normalize();
-        enemyMesh.position.copy(basePos)
+        enemyGroup.position.copy(basePos)
             .addScaledVector(normal, (this.rng() - 0.5) * this.enemyLateralOffset)
             .addScaledVector(binormal, (this.rng() - 0.5) * this.enemyLateralOffset);
-        this.scene.add(enemyMesh);
+        enemyGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), tangent);
+        this.scene.add(enemyGroup);
 
         const enemyBody = new CANNON.Body({ mass: 1 });
         enemyBody.addShape(new CANNON.Sphere(7));
-        enemyBody.position.copy(enemyMesh.position);
+        enemyBody.position.copy(enemyGroup.position);
         this.world.addBody(enemyBody);
 
-        this.enemyShips.push({ mesh: enemyMesh, body: enemyBody });
+        this.enemyShips.push({ mesh: enemyGroup, body: enemyBody });
         this.enemyShotCounts.set(enemyBody, 0);
         this.enemyHits.set(enemyBody, 0);
         this.enemySpawnsThisLevel++;
@@ -641,6 +688,46 @@ class PodRacingGame {
         this.scene.add(this.dynamicLight);
     }
 
+    private triggerEnemyExplosion(position: THREE.Vector3): void {
+        const explosionParticleCount = 100;
+        const explosionGeometry = new THREE.BufferGeometry();
+        const explosionPositions = new Float32Array(explosionParticleCount * 3);
+        const velocities: THREE.Vector3[] = [];
+        const lifetimes: number[] = [];
+        const duration = 1.5;
+
+        for (let i = 0; i < explosionPositions.length; i += 3) {
+            explosionPositions[i] = position.x;
+            explosionPositions[i + 1] = position.y;
+            explosionPositions[i + 2] = position.z;
+
+            const velocity = new THREE.Vector3(
+                (this.rng() - 0.5) * 20,
+                (this.rng() - 0.5) * 20,
+                (this.rng() - 0.5) * 20
+            ).normalize().multiplyScalar(50 + this.rng() * 20);
+
+            velocities.push(velocity);
+            lifetimes.push(duration);
+        }
+
+        explosionGeometry.setAttribute('position', new THREE.BufferAttribute(explosionPositions, 3));
+        const explosionMaterial = new THREE.PointsMaterial({
+            color: 0xff5500,
+            size: 4,
+            transparent: true,
+            opacity: 1,
+            blending: THREE.AdditiveBlending
+        });
+        explosionMaterial.color.setHSL(this.rng() * 0.1 + 0.05, 1, 0.5);
+
+        const particles = new THREE.Points(explosionGeometry, explosionMaterial);
+        this.scene.add(particles);
+        this.explosionInstances.push({ particles, velocities, lifetimes, duration });
+
+        this.explosionSound.play().catch(err => console.error("Explosion sound failed:", err));
+    }
+
     private animate(): void {
         requestAnimationFrame(() => this.animate());
         if (this.isPaused) return;
@@ -695,7 +782,7 @@ class PodRacingGame {
 
             this.countdownTimer += deltaTime;
             const timeLeft = Math.max(0, this.countdown - this.countdownTimer);
-            this.countdownElement.textContent = timeLeft > 0 ? `Race starts in ${Math.ceil(timeLeft)}...` : "Go!";
+            this.countdownElement.textContent = timeLeft > 0 ? `${Math.ceil(timeLeft)}` : "Go!";
             this.renderer.render(this.scene, this.camera);
 
             if (timeLeft <= 0) {
@@ -743,11 +830,15 @@ class PodRacingGame {
                 this.scene.remove(bullet.mesh);
                 this.world.removeBody(bullet.body);
             });
+            this.explosionInstances.forEach(instance => {
+                this.scene.remove(instance.particles);
+            });
             this.obstacles = [];
             this.speedBoosts = [];
             this.bullets = [];
             this.enemyShips = [];
             this.enemyBullets = [];
+            this.explosionInstances = [];
             this.lastEnemyShotTimes.clear();
             this.enemyShotCounts.clear();
             this.enemyHits.clear();
@@ -963,7 +1054,7 @@ class PodRacingGame {
 
         this.enemySpawnTimer += deltaTime;
         if (this.enemySpawnTimer > this.enemySpawnInterval && this.enemySpawnsThisLevel < this.maxEnemySpawnsPerLevel) {
-            if (this.rng() < 0.1) {
+            if (this.rng() < 0.3) { // Increased from 0.1 to 0.3 for 3x frequency
                 this.spawnEnemyShip();
             }
             this.enemySpawnTimer = 0;
@@ -1020,16 +1111,7 @@ class PodRacingGame {
             for (let j = this.bullets.length - 1; j >= 0; j--) {
                 const bullet = this.bullets[j];
                 if (bullet.mesh.position.distanceTo(enemy.mesh.position) < 8) {
-                    this.explosionSound.play();
-                    this.scene.add(this.thrusterParticles);
-                    const particlePositions = this.thrusterParticles.geometry.attributes.position.array as Float32Array;
-                    for (let k = 0; k < particlePositions.length; k += 3) {
-                        particlePositions[k] = enemy.mesh.position.x + (this.rng() - 0.5) * 10;
-                        particlePositions[k + 1] = enemy.mesh.position.y + (this.rng() - 0.5) * 10;
-                        particlePositions[k + 2] = enemy.mesh.position.z + (this.rng() - 0.5) * 10;
-                    }
-                    this.thrusterParticles.geometry.attributes.position.needsUpdate = true;
-                    setTimeout(() => this.scene.remove(this.thrusterParticles), 500);
+                    this.triggerEnemyExplosion(enemy.mesh.position);
 
                     this.scene.remove(enemy.mesh);
                     this.world.removeBody(enemy.body);
@@ -1113,11 +1195,36 @@ class PodRacingGame {
             this.dynamicLight.intensity = 4 + Math.sin(this.survivalTime * 2) * 2;
         }
 
+        for (let i = this.explosionInstances.length - 1; i >= 0; i--) {
+            const instance = this.explosionInstances[i];
+            const positions = instance.particles.geometry.attributes.position.array as Float32Array;
+            let allExpired = true;
+
+            for (let j = 0; j < positions.length; j += 3) {
+                if (instance.lifetimes[j / 3] > 0) {
+                    positions[j] += instance.velocities[j / 3].x * deltaTime;
+                    positions[j + 1] += instance.velocities[j / 3].y * deltaTime;
+                    positions[j + 2] += instance.velocities[j / 3].z * deltaTime;
+
+                    instance.lifetimes[j / 3] -= deltaTime;
+                    allExpired = false;
+
+                    const material = instance.particles.material as THREE.PointsMaterial;
+                    material.opacity = Math.max(0, instance.lifetimes[j / 3] / instance.duration);
+                }
+            }
+
+            instance.particles.geometry.attributes.position.needsUpdate = true;
+            if (allExpired) {
+                this.scene.remove(instance.particles);
+                this.explosionInstances.splice(i, 1);
+            }
+        }
+
         const progress = (this.podDistance / trackLength) * 100;
         const progressBar = document.getElementById("progressBar") as HTMLElement;
         if (progressBar) {
-            progressBar.style.width = `${progress}%`;
-            progressBar.textContent = `Level ${this.level} - ${Math.floor(progress)}%`;
+            progressBar.style.width = `${progress}%`; // Fills up within fixed container
         }
 
         this.updateHUD();
