@@ -3,6 +3,15 @@ import * as CANNON from "cannon-es";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 const seedrandom = require('seedrandom');
 
+// Inline type augmentation for cannon-es
+declare module 'cannon-es' {
+    interface Body {
+        userData?: {
+            debugMesh?: THREE.Mesh;
+        };
+    }
+}
+
 class PodRacingGame {
     private scene: THREE.Scene = new THREE.Scene();
     private camera: THREE.PerspectiveCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 20000);
@@ -68,7 +77,7 @@ class PodRacingGame {
         if (!this.canvas) throw new Error("Canvas not found");
         this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setClearColor(0x000000, 1); // Black background for visibility
+        this.renderer.setClearColor(0x000000, 1);
         this.world.gravity.set(0, 0, 0);
 
         this.backgroundMusic = new Audio('/assets/music.mp3');
@@ -284,9 +293,18 @@ class PodRacingGame {
             this.scene.add(asteroid);
     
             const obstacleBody = new CANNON.Body({ mass: 1 });
-            obstacleBody.addShape(new CANNON.Box(new CANNON.Vec3(2 * scaleFactor, 2 * scaleFactor, 2 * scaleFactor)));
+            obstacleBody.addShape(new CANNON.Box(new CANNON.Vec3(40 * scaleFactor, 40 * scaleFactor, 40 * scaleFactor)));
             obstacleBody.position.copy(asteroid.position);
             this.world.addBody(obstacleBody);
+
+            const debugSphere = new THREE.Mesh(
+                new THREE.BoxGeometry(80 * scaleFactor, 80 * scaleFactor, 80 * scaleFactor),
+                new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.3 })
+            );
+            debugSphere.position.copy(asteroid.position);
+            this.scene.add(debugSphere);
+            obstacleBody.userData = { debugMesh: debugSphere };
+
             this.obstacles.push({ mesh: asteroid, body: obstacleBody, isFullAsteroid: true });
         }
     
@@ -362,77 +380,74 @@ class PodRacingGame {
         this.scene.add(this.dynamicLight);
     }
 
+    private shootBullet(): void {
+        const currentTime = performance.now();
+        if (currentTime - this.lastShotTime < this.fireRate) return;
+        this.lastShotTime = currentTime;
 
-private shootBullet(): void {
-    const currentTime = performance.now();
-    if (currentTime - this.lastShotTime < this.fireRate) {
-        console.log(`Shot blocked: Too soon since last shot (${currentTime - this.lastShotTime}ms < ${this.fireRate}ms)`);
-        return;
+        const oscillator = this.audioContext.createOscillator();
+        const gainNode = this.audioContext.createGain();
+        oscillator.type = 'square';
+        oscillator.frequency.setValueAtTime(600, this.audioContext.currentTime);
+        oscillator.frequency.exponentialRampToValueAtTime(300, this.audioContext.currentTime + 0.05);
+        gainNode.gain.setValueAtTime(0.3, this.audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.1);
+        oscillator.connect(gainNode);
+        gainNode.connect(this.audioContext.destination);
+        oscillator.start();
+        oscillator.stop(this.audioContext.currentTime + 0.1);
+
+        const bulletGeometry = new THREE.SphereGeometry(1, 16, 16);
+        const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00, emissive: 0xffff00, emissiveIntensity: 3 });
+        const bulletMesh = new THREE.Mesh(bulletGeometry, bulletMaterial);
+
+        const spawnOffset = new THREE.Vector3(0, 0, -3).applyQuaternion(this.pod.quaternion);
+        bulletMesh.position.copy(this.pod.position).add(spawnOffset);
+        this.scene.add(bulletMesh);
+
+        const bulletBody = new CANNON.Body({ mass: 1 });
+        bulletBody.addShape(new CANNON.Sphere(1));
+        bulletBody.position.copy(bulletMesh.position);
+        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.pod.quaternion).normalize();
+        bulletBody.velocity.set(forward.x * 1000, forward.y * 1000, forward.z * 1000);
+        this.world.addBody(bulletBody);
+
+        this.bullets.push({ mesh: bulletMesh, body: bulletBody });
+
+        const debugBullet = new THREE.Mesh(
+            new THREE.SphereGeometry(1, 16, 16),
+            new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.5 })
+        );
+        debugBullet.position.copy(bulletMesh.position);
+        this.scene.add(debugBullet);
+        setTimeout(() => this.scene.remove(debugBullet), 2000);
     }
-    this.lastShotTime = currentTime;
 
-    console.log("Shooting bullet...");
-    const oscillator = this.audioContext.createOscillator();
-    const gainNode = this.audioContext.createGain();
-    oscillator.type = 'square';
-    oscillator.frequency.setValueAtTime(600, this.audioContext.currentTime);
-    oscillator.frequency.exponentialRampToValueAtTime(300, this.audioContext.currentTime + 0.05);
-    gainNode.gain.setValueAtTime(0.3, this.audioContext.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.1);
-    oscillator.connect(gainNode);
-    gainNode.connect(this.audioContext.destination);
-    oscillator.start();
-    oscillator.stop(this.audioContext.currentTime + 0.1);
-    console.log("Shot sound played");
+    private animate(): void {
+        requestAnimationFrame(() => this.animate());
+        if (this.isPaused) return;
 
-    // Bullet creation
-    const bulletGeometry = new THREE.SphereGeometry(1, 16, 16);
-    const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00, emissive: 0xffff00, emissiveIntensity: 3 });
-    const bulletMesh = new THREE.Mesh(bulletGeometry, bulletMaterial);
+        this.world.step(1 / 60);
+        const deltaTime = 1 / 60;
 
-    // Position at pod's front, aligned with pod's orientation
-    const spawnOffset = new THREE.Vector3(0, 0, -3).applyQuaternion(this.pod.quaternion); // -3 for forward in pod's local space
-    bulletMesh.position.copy(this.pod.position).add(spawnOffset);
-    bulletMesh.visible = true;
-    this.scene.add(bulletMesh);
-    console.log(`Bullet created at: ${bulletMesh.position.x.toFixed(2)}, ${bulletMesh.position.y.toFixed(2)}, ${bulletMesh.position.z.toFixed(2)}`);
-    console.log(`Pod position: ${this.pod.position.x.toFixed(2)}, ${this.pod.position.y.toFixed(2)}, ${this.pod.position.z.toFixed(2)}`);
-    console.log(`Pod quaternion: x=${this.pod.quaternion.x.toFixed(2)}, y=${this.pod.quaternion.y.toFixed(2)}, z=${this.pod.quaternion.z.toFixed(2)}, w=${this.pod.quaternion.w.toFixed(2)}`);
+        if (!this.raceStarted) {
+            if (this.countdownElement.textContent === "Click to start") {
+                const startPos = this.trackPath.getPointAt(0);
+                this.camera.position.copy(startPos);
+                const startTangent = this.trackPath.getTangentAt(0).negate();
+                this.camera.lookAt(startPos.clone().add(startTangent));
+                this.renderer.render(this.scene, this.camera);
+                return;
+            }
 
-    // Physics setup: Use pod's forward direction
-    const bulletBody = new CANNON.Body({ mass: 1 });
-    bulletBody.addShape(new CANNON.Sphere(1));
-    bulletBody.position.copy(bulletMesh.position);
-    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.pod.quaternion).normalize(); // Pod's forward
-    bulletBody.velocity.set(forward.x * 1000, forward.y * 1000, forward.z * 1000);
-    this.world.addBody(bulletBody);
-    console.log(`Bullet physics added with velocity: ${bulletBody.velocity.x.toFixed(2)}, ${bulletBody.velocity.y.toFixed(2)}, ${bulletBody.velocity.z.toFixed(2)}`);
-
-    this.bullets.push({ mesh: bulletMesh, body: bulletBody });
-    console.log(`Bullet added to bullets array, total bullets: ${this.bullets.length}`);
-
-    // Debug marker (optional, made smaller and transparent)
-    // const debugMarker = new THREE.Mesh(
-    //     new THREE.SphereGeometry(0.5, 16, 16), // Smaller size
-    //     new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5 })
-    // );
-
-
-    // debugMarker.position.copy(bulletMesh.position);
-    // this.scene.add(debugMarker);
-    // setTimeout(() => this.scene.remove(debugMarker), 1000); // Shorter duration
-    console.log("Debug marker (small red sphere) added at bullet spawn");
-}
-
-private animate(): void {
-    requestAnimationFrame(() => this.animate());
-    if (this.isPaused) return;
-
-    this.world.step(1 / 60);
-    const deltaTime = 1 / 60;
-
-    if (!this.raceStarted) {
-        if (this.countdownElement.textContent === "Click to start") {
+            this.countdownTimer += deltaTime;
+            const timeLeft = Math.max(0, this.countdown - this.countdownTimer);
+            this.countdownElement.textContent = timeLeft > 0 ? `Race starts in ${Math.ceil(timeLeft)}...` : "Go!";
+            if (timeLeft <= 0) {
+                this.raceStarted = true;
+                this.countdownElement.style.display = "none";
+                this.backgroundMusic.play();
+            }
             const startPos = this.trackPath.getPointAt(0);
             this.camera.position.copy(startPos);
             const startTangent = this.trackPath.getTangentAt(0).negate();
@@ -441,263 +456,256 @@ private animate(): void {
             return;
         }
 
-        this.countdownTimer += deltaTime;
-        const timeLeft = Math.max(0, this.countdown - this.countdownTimer);
-        this.countdownElement.textContent = timeLeft > 0 ? `Race starts in ${Math.ceil(timeLeft)}...` : "Go!";
-        if (timeLeft <= 0) {
-            this.raceStarted = true;
-            this.countdownElement.style.display = "none";
-            this.backgroundMusic.play();
+        this.survivalTime += deltaTime;
+        this.score += this.podSpeed * deltaTime;
+        if (this.survivalTime % (100 / 10) < deltaTime) {
+            this.podSpeed += 0.6;
+            console.log(`Speed increased to ${this.podSpeed}`);
         }
-        const startPos = this.trackPath.getPointAt(0);
-        this.camera.position.copy(startPos);
-        const startTangent = this.trackPath.getTangentAt(0).negate();
-        this.camera.lookAt(startPos.clone().add(startTangent));
-        this.renderer.render(this.scene, this.camera);
-        return;
-    }
 
-    this.survivalTime += deltaTime;
-    this.score += this.podSpeed * deltaTime;
-    if (this.survivalTime % (100 / 10) < deltaTime) {
-        this.podSpeed += 0.6;
-        console.log(`Speed increased to ${this.podSpeed}`);
-    }
-
-    const trackLength = this.trackPath.getLength();
-    this.podDistance += this.podSpeed * deltaTime;
-    if (this.podDistance > trackLength) {
-        this.level += 1;
-        if (this.level > 100) {
-            alert("Congratulations! You’ve won the game!");
-            this.isPaused = true;
-            this.pauseMenu.style.display = "block";
-            return;
+        const trackLength = this.trackPath.getLength();
+        this.podDistance += this.podSpeed * deltaTime;
+        if (this.podDistance > trackLength) {
+            this.level += 1;
+            if (this.level > 100) {
+                alert("Congratulations! You’ve won the game!");
+                this.isPaused = true;
+                this.pauseMenu.style.display = "block";
+                return;
+            }
+            this.podDistance = 0;
+            this.survivalTime = 0;
+            this.scene.remove(this.pathLine);
+            this.obstacles.forEach(o => {
+                this.scene.remove(o.mesh);
+                this.world.removeBody(o.body);
+                if (o.body.userData?.debugMesh) this.scene.remove(o.body.userData.debugMesh);
+            });
+            this.speedBoosts.forEach(b => {
+                this.scene.remove(b.mesh);
+                this.world.removeBody(b.body);
+            });
+            this.obstacles = [];
+            this.speedBoosts = [];
+            this.bullets = [];
+            this.createScene();
         }
-        this.podDistance = 0;
-        this.survivalTime = 0;
-        this.scene.remove(this.pathLine);
-        this.obstacles.forEach(o => {
-            this.scene.remove(o.mesh);
-            this.world.removeBody(o.body);
-        });
-        this.speedBoosts.forEach(b => {
-            this.scene.remove(b.mesh);
-            this.world.removeBody(b.body);
-        });
-        this.obstacles = [];
-        this.speedBoosts = [];
-        this.bullets = [];
-        this.createScene();
-    }
 
-    const t = this.podDistance / trackLength;
-    const basePos = this.trackPath.getPointAt(t);
-    const tangent = this.trackPath.getTangentAt(t);
-    const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
-    const binormal = tangent.clone().cross(normal).normalize();
+        const t = this.podDistance / trackLength;
+        const basePos = this.trackPath.getPointAt(t);
+        const tangent = this.trackPath.getTangentAt(t);
+        const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
+        const binormal = tangent.clone().cross(normal).normalize();
 
-    const maxOffset = 20;
-    const moveSpeed = 30;
-    const lerpFactor = 0.1;
+        const maxOffset = 20;
+        const moveSpeed = 30;
+        const lerpFactor = 0.1;
 
-    const rightDir = new THREE.Vector3(1, 0, 0);
-    const upDir = new THREE.Vector3(0, 1, 0);
-    if (this.moveLeft) this.podOffsetX -= moveSpeed * deltaTime;
-    if (this.moveRight) this.podOffsetX += moveSpeed * deltaTime;
-    if (this.moveUp) this.podOffsetY += moveSpeed * deltaTime;
-    if (this.moveDown) this.podOffsetY -= moveSpeed * deltaTime;
+        const rightDir = new THREE.Vector3(1, 0, 0);
+        const upDir = new THREE.Vector3(0, 1, 0);
+        if (this.moveLeft) this.podOffsetX -= moveSpeed * deltaTime;
+        if (this.moveRight) this.podOffsetX += moveSpeed * deltaTime;
+        if (this.moveUp) this.podOffsetY += moveSpeed * deltaTime;
+        if (this.moveDown) this.podOffsetY -= moveSpeed * deltaTime;
 
-    this.podOffsetX = Math.max(-maxOffset, Math.min(maxOffset, this.podOffsetX));
-    this.podOffsetY = Math.max(-maxOffset, Math.min(maxOffset, this.podOffsetY));
+        this.podOffsetX = Math.max(-maxOffset, Math.min(maxOffset, this.podOffsetX));
+        this.podOffsetY = Math.max(-maxOffset, Math.min(maxOffset, this.podOffsetY));
 
-    this.currentOffsetX = THREE.MathUtils.lerp(this.currentOffsetX, this.podOffsetX, lerpFactor);
-    this.currentOffsetY = THREE.MathUtils.lerp(this.currentOffsetY, this.podOffsetY, lerpFactor);
+        this.currentOffsetX = THREE.MathUtils.lerp(this.currentOffsetX, this.podOffsetX, lerpFactor);
+        this.currentOffsetY = THREE.MathUtils.lerp(this.currentOffsetY, this.podOffsetY, lerpFactor);
 
-    const podOffsetVec = rightDir.clone().multiplyScalar(this.currentOffsetX).add(upDir.clone().multiplyScalar(this.currentOffsetY));
-    const podPos = basePos.clone().add(podOffsetVec);
-    this.podBody.position.copy(podPos);
-    this.pod.position.copy(this.podBody.position);
+        const podOffsetVec = rightDir.clone().multiplyScalar(this.currentOffsetX).add(upDir.clone().multiplyScalar(this.currentOffsetY));
+        const podPos = basePos.clone().add(podOffsetVec);
+        this.podBody.position.copy(podPos);
+        this.pod.position.copy(this.podBody.position);
 
-    const quaternion = new THREE.Quaternion();
-    quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), tangent);
-    const yawQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
-    const pitchQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), this.pitch);
-    quaternion.multiply(yawQuat).multiply(pitchQuat);
-    this.pod.quaternion.copy(quaternion);
+        const quaternion = new THREE.Quaternion();
+        quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), tangent);
+        const yawQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
+        const pitchQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), this.pitch);
+        quaternion.multiply(yawQuat).multiply(pitchQuat);
+        this.pod.quaternion.copy(quaternion);
 
-    if (!this.moveLeft && !this.moveRight) this.podOffsetX *= 0.9;
-    if (!this.moveUp && !this.moveDown) this.podOffsetY *= 0.9;
+        if (!this.moveLeft && !this.moveRight) this.podOffsetX *= 0.9;
+        if (!this.moveUp && !this.moveDown) this.podOffsetY *= 0.9;
 
-    switch (this.cameraMode) {
-        case 0:
-            this.camera.position.copy(this.pod.position).addScaledVector(tangent, -2);
-            this.camera.quaternion.copy(this.pod.quaternion);
-            break;
-        case 1:
-            this.camera.position.copy(this.pod.position).addScaledVector(tangent.negate(), 15).addScaledVector(normal, 5);
-            this.camera.lookAt(this.pod.position);
-            break;
-        case 2:
-            this.camera.position.set(0, 25000, 0);
-            this.camera.lookAt(new THREE.Vector3(0, 0, 0));
-            break;
-    }
-
-    console.log(`Camera position: ${this.camera.position.x.toFixed(2)}, ${this.camera.position.y.toFixed(2)}, ${this.camera.position.z.toFixed(2)}`);
-
-    for (let i = this.obstacles.length - 1; i >= 0; i--) {
-        const obstacle = this.obstacles[i];
-        if (!obstacle.mesh || !obstacle.body) continue;
-        obstacle.mesh.rotation.x += 0.0025;
-        obstacle.mesh.rotation.y += 0.0025;
-        obstacle.mesh.rotation.z += 0.0025;
-
-        const aggressionFactor = Math.min(this.level / 100, 1);
-        if (this.rng() < aggressionFactor * 0.1) {
-            const directionToPod = this.pod.position.clone().sub(obstacle.mesh.position).normalize();
-            obstacle.body.velocity.set(directionToPod.x * 30 * aggressionFactor, directionToPod.y * 30 * aggressionFactor, directionToPod.z * 30 * aggressionFactor);
+        switch (this.cameraMode) {
+            case 0:
+                this.camera.position.copy(this.pod.position).addScaledVector(tangent, -2);
+                this.camera.quaternion.copy(this.pod.quaternion);
+                break;
+            case 1:
+                this.camera.position.copy(this.pod.position).addScaledVector(tangent.negate(), 15).addScaledVector(normal, 5);
+                this.camera.lookAt(this.pod.position);
+                break;
+            case 2:
+                this.camera.position.set(0, 25000, 0);
+                this.camera.lookAt(new THREE.Vector3(0, 0, 0));
+                break;
         }
-        obstacle.mesh.position.copy(obstacle.body.position);
-    }
 
-    for (let i = this.bullets.length - 1; i >= 0; i--) {
-        const bullet = this.bullets[i];
-        if (!bullet.mesh || !bullet.body) {
-            console.log(`Bullet ${i} invalid: mesh=${!!bullet.mesh}, body=${!!bullet.body}`);
-            this.bullets.splice(i, 1);
-            continue;
+        for (let i = this.obstacles.length - 1; i >= 0; i--) {
+            const obstacle = this.obstacles[i];
+            if (!obstacle.mesh || !obstacle.body) continue;
+            obstacle.mesh.rotation.x += 0.0025;
+            obstacle.mesh.rotation.y += 0.0025;
+            obstacle.mesh.rotation.z += 0.0025;
+
+            obstacle.mesh.position.copy(obstacle.body.position);
+            if (obstacle.body.userData?.debugMesh) {
+                obstacle.body.userData.debugMesh.position.copy(obstacle.body.position);
+            }
+
+            const aggressionFactor = Math.min(this.level / 100, 1);
+            if (this.rng() < aggressionFactor * 0.1) {
+                const directionToPod = this.pod.position.clone().sub(obstacle.mesh.position).normalize();
+                obstacle.body.velocity.set(directionToPod.x * 30 * aggressionFactor, directionToPod.y * 30 * aggressionFactor, directionToPod.z * 30 * aggressionFactor);
+            }
         }
-        bullet.mesh.position.copy(bullet.body.position);
-        bullet.mesh.visible = true;
-        const distanceFromCamera = bullet.mesh.position.distanceTo(this.camera.position);
-        console.log(`Bullet ${i} position: ${bullet.mesh.position.x.toFixed(2)}, ${bullet.mesh.position.y.toFixed(2)}, ${bullet.mesh.position.z.toFixed(2)}, distance from camera: ${distanceFromCamera.toFixed(2)}`);
 
-        let bulletHit = false;
-        for (let j = this.obstacles.length - 1; j >= 0; j--) {
-            const obstacle = this.obstacles[j];
+        for (let i = this.bullets.length - 1; i >= 0; i--) {
+            const bullet = this.bullets[i];
+            if (!bullet.mesh || !bullet.body) {
+                this.bullets.splice(i, 1);
+                continue;
+            }
+            bullet.mesh.position.copy(bullet.body.position);
+            bullet.mesh.visible = true;
+
+            let bulletHit = false;
+            for (let j = this.obstacles.length - 1; j >= 0; j--) {
+                const obstacle = this.obstacles[j];
+                if (!obstacle.mesh || !obstacle.body) continue;
+                const scaleFactor = obstacle.mesh.scale.x;
+                const hitDistance = 3 + 2 * scaleFactor;
+                const distance = bullet.mesh.position.distanceTo(obstacle.mesh.position);
+                if (distance < hitDistance) {
+                    this.explosionSound.play();
+                    const pushDirection = obstacle.mesh.position.clone().sub(bullet.mesh.position).normalize();
+                    const pushForce = 300;
+                    obstacle.body.velocity.set(pushDirection.x * pushForce, pushDirection.y * pushForce, pushDirection.z * pushForce);
+                    this.splitAsteroid(obstacle.mesh, obstacle.body, scaleFactor);
+                    this.scene.remove(obstacle.mesh);
+                    this.world.removeBody(obstacle.body);
+                    if (obstacle.body.userData?.debugMesh) {
+                        this.scene.remove(obstacle.body.userData.debugMesh);
+                    }
+                    this.obstacles.splice(j, 1);
+                    bulletHit = true;
+                    this.score += 50;
+                    break;
+                }
+            }
+
+            const distanceFromOrigin = bullet.mesh.position.length();
+            if (bulletHit || distanceFromOrigin > 20000) {
+                this.scene.remove(bullet.mesh);
+                this.world.removeBody(bullet.body);
+                this.bullets.splice(i, 1);
+            }
+        }
+
+        for (let i = this.obstacles.length - 1; i >= 0; i--) {
+            const obstacle = this.obstacles[i];
             if (!obstacle.mesh || !obstacle.body) continue;
             const scaleFactor = obstacle.mesh.scale.x;
-            const hitDistance = 2 + 0.5 * scaleFactor;
-            const distance = bullet.mesh.position.distanceTo(obstacle.mesh.position);
-            if (distance < hitDistance) {
+            if (this.pod.position.distanceTo(obstacle.mesh.position) < 6 * scaleFactor) {
                 this.explosionSound.play();
-                const pushDirection = obstacle.mesh.position.clone().sub(bullet.mesh.position).normalize();
-                const pushForce = 300;
-                obstacle.body.velocity.set(pushDirection.x * pushForce, pushDirection.y * pushForce, pushDirection.z * pushForce);
-                console.log(`Asteroid ${j} hit at ${obstacle.mesh.position.x.toFixed(2)}, ${obstacle.mesh.position.y.toFixed(2)}, ${obstacle.mesh.position.z.toFixed(2)}`);
-                console.log(`Asteroid pushed with velocity: ${obstacle.body.velocity.x.toFixed(2)}, ${obstacle.body.velocity.y.toFixed(2)}, ${obstacle.body.velocity.z.toFixed(2)}`);
+                const directionAway = obstacle.mesh.position.clone().sub(this.pod.position).normalize();
+                obstacle.body.velocity.set(directionAway.x * 50, directionAway.y * 50, directionAway.z * 50);
                 this.splitAsteroid(obstacle.mesh, obstacle.body, scaleFactor);
                 this.scene.remove(obstacle.mesh);
                 this.world.removeBody(obstacle.body);
-                this.obstacles.splice(j, 1);
-                bulletHit = true;
-                this.score += 50;
-                break;
+                if (obstacle.body.userData?.debugMesh) {
+                    this.scene.remove(obstacle.body.userData.debugMesh);
+                }
+                this.obstacles.splice(i, 1);
+                this.lives -= 1;
+                this.podSpeed *= 0.8;
+                if (this.lives <= 0) {
+                    this.isPaused = true;
+                    this.pauseMenu.style.display = "block";
+                    alert(`Game Over! Final Score: ${Math.floor(this.score)}`);
+                }
             }
         }
 
-        const distanceFromOrigin = bullet.mesh.position.length();
-        if (bulletHit || distanceFromOrigin > 20000) {
-            console.log(`Bullet ${i} removed: hit=${bulletHit}, distance from origin=${distanceFromOrigin.toFixed(2)}`);
-            this.scene.remove(bullet.mesh);
-            this.world.removeBody(bullet.body);
-            this.bullets.splice(i, 1);
-        }
-    }
-
-    for (let i = this.obstacles.length - 1; i >= 0; i--) {
-        const obstacle = this.obstacles[i];
-        if (!obstacle.mesh || !obstacle.body) continue;
-        const scaleFactor = obstacle.mesh.scale.x;
-        if (this.pod.position.distanceTo(obstacle.mesh.position) < 6 * scaleFactor) {
-            this.explosionSound.play();
-            const directionAway = obstacle.mesh.position.clone().sub(this.pod.position).normalize();
-            obstacle.body.velocity.set(directionAway.x * 50, directionAway.y * 50, directionAway.z * 50);
-            this.splitAsteroid(obstacle.mesh, obstacle.body, scaleFactor);
-            this.scene.remove(obstacle.mesh);
-            this.world.removeBody(obstacle.body);
-            this.obstacles.splice(i, 1);
-            this.lives -= 1;
-            this.podSpeed *= 0.8;
-            if (this.lives <= 0) {
-                this.isPaused = true;
-                this.pauseMenu.style.display = "block";
-                alert(`Game Over! Final Score: ${Math.floor(this.score)}`);
+        this.speedBoosts.forEach((boost, index) => {
+            if (!boost.mesh || !boost.body) return;
+            if (this.pod.position.distanceTo(boost.mesh.position) < 2.5) {
+                this.podSpeed += 20;
+                this.scene.remove(boost.mesh);
+                this.world.removeBody(boost.body);
+                this.speedBoosts.splice(index, 1);
+                this.score += 100;
             }
+        });
+
+        this.asteroidSpawnTimer += deltaTime;
+        const spawnInterval = this.asteroidSpawnInterval * (1 - (this.level - 1) / 100);
+        const asteroidsToSpawn = Math.floor(this.asteroidSpawnTimer / spawnInterval);
+        if (asteroidsToSpawn > 0) {
+            for (let i = 0; i < asteroidsToSpawn; i++) {
+                const t = (this.podDistance + 500) / trackLength % 1;
+                const basePos = this.trackPath.getPointAt(t);
+                const tangent = this.trackPath.getTangentAt(t);
+                const offsetX = (this.rng() - 0.5) * 100;
+                const offsetY = (this.rng() - 0.5) * 100;
+                const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
+                const binormal = tangent.clone().cross(normal).normalize();
+
+                const scaleFactor = 0.2 + this.rng() * 0.8;
+                const asteroid = this.asteroidModel!.clone() as THREE.Group;
+                asteroid.scale.set(scaleFactor, scaleFactor, scaleFactor);
+                asteroid.position.copy(basePos).addScaledVector(normal, offsetX).addScaledVector(binormal, offsetY);
+                this.scene.add(asteroid);
+
+                const obstacleBody = new CANNON.Body({ mass: 1 });
+                obstacleBody.addShape(new CANNON.Box(new CANNON.Vec3(40 * scaleFactor, 40 * scaleFactor, 40 * scaleFactor)));
+                obstacleBody.position.copy(asteroid.position);
+                this.world.addBody(obstacleBody);
+
+                const debugSphere = new THREE.Mesh(
+                    new THREE.BoxGeometry(80 * scaleFactor, 80 * scaleFactor, 80 * scaleFactor),
+                    new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.3 })
+                );
+                debugSphere.position.copy(asteroid.position);
+                this.scene.add(debugSphere);
+                obstacleBody.userData = { debugMesh: debugSphere };
+
+                this.obstacles.push({ mesh: asteroid, body: obstacleBody, isFullAsteroid: true });
+            }
+            this.asteroidSpawnTimer = this.asteroidSpawnTimer % spawnInterval;
         }
-    }
 
-    this.speedBoosts.forEach((boost, index) => {
-        if (!boost.mesh || !boost.body) return;
-        if (this.pod.position.distanceTo(boost.mesh.position) < 2.5) {
-            this.podSpeed += 20;
-            this.scene.remove(boost.mesh);
-            this.world.removeBody(boost.body);
-            this.speedBoosts.splice(index, 1);
-            this.score += 100;
+        const particlePositions = this.thrusterParticles.geometry.attributes.position.array as Float32Array;
+        for (let i = 0; i < particlePositions.length; i += 3) {
+            particlePositions[i] = this.pod.position.x - tangent.x * 3 + (this.rng() - 0.5) * 2;
+            particlePositions[i + 1] = this.pod.position.y - tangent.y * 3 + (this.rng() - 0.5) * 2;
+            particlePositions[i + 2] = this.pod.position.z - tangent.z * 3 + (this.rng() - 0.5) * 2;
         }
-    });
+        this.thrusterParticles.geometry.attributes.position.needsUpdate = true;
 
-    this.asteroidSpawnTimer += deltaTime;
-    const spawnInterval = this.asteroidSpawnInterval * (1 - (this.level - 1) / 100);
-    const asteroidsToSpawn = Math.floor(this.asteroidSpawnTimer / spawnInterval);
-    if (asteroidsToSpawn > 0) {
-        for (let i = 0; i < asteroidsToSpawn; i++) {
-            const t = (this.podDistance + 500) / trackLength % 1;
-            const basePos = this.trackPath.getPointAt(t);
-            const tangent = this.trackPath.getTangentAt(t);
-            const offsetX = (this.rng() - 0.5) * 100;
-            const offsetY = (this.rng() - 0.5) * 100;
-            const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
-            const binormal = tangent.clone().cross(normal).normalize();
-
-            const scaleFactor = 0.2 + this.rng() * 0.8;
-            const asteroid = this.asteroidModel!.clone() as THREE.Group;
-            asteroid.scale.set(scaleFactor, scaleFactor, scaleFactor);
-            asteroid.position.copy(basePos).addScaledVector(normal, offsetX).addScaledVector(binormal, offsetY);
-            this.scene.add(asteroid);
-
-            const obstacleBody = new CANNON.Body({ mass: 1 });
-            obstacleBody.addShape(new CANNON.Box(new CANNON.Vec3(2 * scaleFactor, 2 * scaleFactor, 2 * scaleFactor)));
-            obstacleBody.position.copy(asteroid.position);
-            this.world.addBody(obstacleBody);
-            this.obstacles.push({ mesh: asteroid, body: obstacleBody, isFullAsteroid: true });
+        if (this.dynamicLight) {
+            this.dynamicLight.position.copy(this.pod.position);
+            this.dynamicLight.intensity = 4 + Math.sin(this.survivalTime * 2) * 2;
         }
-        this.asteroidSpawnTimer = this.asteroidSpawnTimer % spawnInterval;
-    }
 
-    const particlePositions = this.thrusterParticles.geometry.attributes.position.array as Float32Array;
-    for (let i = 0; i < particlePositions.length; i += 3) {
-        particlePositions[i] = this.pod.position.x - tangent.x * 3 + (this.rng() - 0.5) * 2;
-        particlePositions[i + 1] = this.pod.position.y - tangent.y * 3 + (this.rng() - 0.5) * 2;
-        particlePositions[i + 2] = this.pod.position.z - tangent.z * 3 + (this.rng() - 0.5) * 2;
-    }
-    this.thrusterParticles.geometry.attributes.position.needsUpdate = true;
+        const progress = (this.podDistance / trackLength) * 100;
+        const progressBar = document.getElementById("progressBar") as HTMLElement;
+        if (progressBar) {
+            progressBar.style.width = `${progress}%`;
+            progressBar.textContent = `Level ${this.level} - ${Math.floor(progress)}%`;
+        }
 
-    if (this.dynamicLight) {
-        this.dynamicLight.position.copy(this.pod.position);
-        this.dynamicLight.intensity = 4 + Math.sin(this.survivalTime * 2) * 2;
+        this.updateHUD();
+        this.renderer.render(this.scene, this.camera);
     }
-
-    const progress = (this.podDistance / trackLength) * 100;
-    const progressBar = document.getElementById("progressBar") as HTMLElement;
-    if (progressBar) {
-        progressBar.style.width = `${progress}%`;
-        progressBar.textContent = `Level ${this.level} - ${Math.floor(progress)}%`;
-    }
-
-    this.updateHUD();
-    this.renderer.render(this.scene, this.camera);
-    console.log("Frame rendered");
-}
 
     private updateHUD(): void {
         this.livesCounter.textContent = `Lives: ${this.lives}`;
         this.scoreCounter.textContent = `Score: ${Math.floor(this.score)}`;
     }
-
-
 
     private splitAsteroid(mesh: THREE.Mesh, body: CANNON.Body, scaleFactor: number): void {
         if (scaleFactor < 0.067) return;
@@ -716,7 +724,19 @@ private animate(): void {
             fragmentBody.velocity.set(scatterVel.x, scatterVel.y, scatterVel.z);
             this.world.addBody(fragmentBody);
 
+            const debugSphere = new THREE.Mesh(
+                new THREE.BoxGeometry(4 * newScale, 4 * newScale, 4 * newScale),
+                new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.3 })
+            );
+            debugSphere.position.copy(fragment.position);
+            this.scene.add(debugSphere);
+            fragmentBody.userData = { debugMesh: debugSphere };
+
             this.obstacles.push({ mesh: fragment, body: fragmentBody, isFullAsteroid: false });
+        }
+
+        if (body.userData?.debugMesh) {
+            this.scene.remove(body.userData.debugMesh);
         }
     }
 
