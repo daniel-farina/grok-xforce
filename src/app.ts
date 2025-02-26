@@ -4,7 +4,6 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 const seedrandom = require('seedrandom');
 import { createNoise3D } from 'simplex-noise';
 
-// Inline type augmentation for cannon-es
 declare module 'cannon-es' {
     interface Body {
         userData?: {
@@ -26,11 +25,10 @@ class PodRacingGame {
     private renderer!: THREE.WebGLRenderer;
     private world: CANNON.World = new CANNON.World();
     private canvas!: HTMLCanvasElement;
-    private pod!: THREE.Mesh; // Red box pod (camera/gun, moves with mouse)
-    private spaceship!: THREE.Group; // Spaceship model (fixed offset, follows path)
+    private pod!: THREE.Mesh;
+    private spaceship!: THREE.Group;
     private podBody!: CANNON.Body;
     private obstacles: { mesh: THREE.Group | THREE.Mesh; body: CANNON.Body; velocity?: CANNON.Vec3; isFullAsteroid: boolean }[] = [];
-    private speedBoosts: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
     private bullets: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
     private enemyShips: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
     private enemyBullets: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
@@ -48,7 +46,8 @@ class PodRacingGame {
     private countdown: number = 3;
     private countdownTimer: number = 0;
     private survivalTime: number = 0;
-    private podSpeed: number = 40;
+    private basePodSpeed: number = 40; // Adjusted for 2-minute levels
+    private podSpeed: number = this.basePodSpeed;
     private podDistance: number = 0;
     private podOffsetX: number = 0;
     private podOffsetY: number = 0;
@@ -62,6 +61,7 @@ class PodRacingGame {
     private pauseMenu!: HTMLElement;
     private resumeButton!: HTMLElement;
     private thrusterParticles!: THREE.Points;
+    private hitParticles!: THREE.Points; // Particles for when pod is hit
     private explosionInstances: ExplosionInstance[] = [];
     private dynamicLight!: THREE.PointLight;
     private level: number = 1;
@@ -78,9 +78,8 @@ class PodRacingGame {
     private asteroidSpawnTimer: number = 0;
     private asteroidSpawnInterval: number = 6;
     private enemySpawnTimer: number = 0;
-    private enemySpawnInterval: number = 20 / 3;
+    private enemySpawnInterval: number = 10; // Spawn every 10 seconds
     private enemySpawnsThisLevel: number = 0;
-    private maxEnemySpawnsPerLevel: number = 12;
     private asteroidModel: THREE.Group | null = null;
     private introAudio!: HTMLAudioElement;
     private isIntroPlaying: boolean = true;
@@ -104,7 +103,7 @@ class PodRacingGame {
     private alertsThisLevel: number = 0;
     private maxAlertsPerLevel: number = 3;
     private enemySpawnDistance: number = 900;
-    private enemyLateralOffset: number = 200;
+    private enemyLateralOffset: number = 100;
     private enemyBaseSpeed: number = 25;
     private enemyFireRate: number = 1000;
     private enemyBulletSpeed: number = 500;
@@ -114,18 +113,20 @@ class PodRacingGame {
     private shotsToLoseLife: number = 10;
     private difficulty: 'easy' | 'normal' | 'hard' = 'normal';
     private spaceshipScale: number = 3.4;
-    private spaceshipPositionX: number = 14; // Fixed X offset
-    private spaceshipPositionY: number = -3; // Fixed Y offset
-    private spaceshipPositionZ: number = 15; // Fixed Z offset
+    private spaceshipPositionX: number = 14;
+    private spaceshipPositionY: number = -3;
+    private spaceshipPositionZ: number = 15;
     private spaceshipRotationX: number = 0;
     private spaceshipRotationY: number = 0;
     private spaceshipRotationZ: number = 0;
     private spaceshipRotationAxisX: number = 0;
     private spaceshipRotationAxisY: number = 0;
     private spaceshipRotationAxisZ: number = -1;
-    private neonSquare!: THREE.LineLoop; 
-    private showNeonSquare: boolean = true; // Toggle for neon square visibility
-    private showDebugControls: boolean = true; 
+    private neonSquare!: THREE.LineLoop;
+    private showNeonSquare: boolean = true;
+    private showDebugControls: boolean = true;
+    private makePodVisible: boolean = false; // Pod invisible by default
+
     constructor() {
         this.initialize().then(() => {
             console.log("Game initialized");
@@ -154,11 +155,7 @@ class PodRacingGame {
 
         this.explosionSound = new Audio('/assets/explosion.mp3');
         this.introAudio = new Audio('/assets/intro-pilot.mp3');
-        this.alertSounds = [
-            new Audio('/assets/alert1.mp3'),
-            new Audio('/assets/alert2.mp3'),
-            new Audio('/assets/alert3.mp3')
-        ];
+        this.alertSounds = [];
         this.audioContext = new AudioContext();
 
         this.assignDomElements();
@@ -170,33 +167,11 @@ class PodRacingGame {
         this.startButton.style.display = "none";
         this.difficultyMenu.style.display = "block";
         const controlsElement = document.getElementById("controls") as HTMLElement;
-        controlsElement.style.display = this.showDebugControls ? "block" : "none"; // Set initial visibility
-    
+        controlsElement.style.display = this.showDebugControls ? "block" : "none";
 
         const textureLoader = new THREE.TextureLoader();
-        this.asteroidTexture = await new Promise<THREE.Texture>((resolve, reject) => {
-            textureLoader.load(
-                '/assets/asteroid/asteroid_texture.jpg',
-                (texture) => resolve(texture),
-                undefined,
-                (error) => reject(error)
-            );
-        }).catch((error) => {
-            console.error('Failed to load asteroid texture:', error);
-            return null;
-        });
-
-        this.metalTexture = await new Promise<THREE.Texture>((resolve, reject) => {
-            textureLoader.load(
-                '/assets/metal.png',
-                (texture) => resolve(texture),
-                undefined,
-                (error) => reject(error)
-            );
-        }).catch((error) => {
-            console.error('Failed to load metal texture:', error);
-            return null;
-        });
+        this.asteroidTexture = await textureLoader.loadAsync('/assets/asteroid/asteroid_texture.jpg').catch(() => null);
+        this.metalTexture = await textureLoader.loadAsync('/assets/metal.png').catch(() => null);
     }
 
     private assignDomElements(): void {
@@ -234,9 +209,8 @@ class PodRacingGame {
         easyButton.addEventListener("click", () => {
             this.difficulty = 'easy';
             this.lives = 15;
-            this.podSpeed = 30;
-            this.enemySpawnInterval = 10;
-            this.maxEnemySpawnsPerLevel = 6;
+            this.basePodSpeed = 30;
+            this.podSpeed = this.basePodSpeed;
             this.startGame();
             this.introAudio.play().catch(err => console.error("Audio playback failed:", err));
             this.songs[this.currentSongIndex].play().catch(err => console.error("Song playback failed:", err));
@@ -245,9 +219,8 @@ class PodRacingGame {
         normalButton.addEventListener("click", () => {
             this.difficulty = 'normal';
             this.lives = 10;
-            this.podSpeed = 40;
-            this.enemySpawnInterval = 20 / 3;
-            this.maxEnemySpawnsPerLevel = 12;
+            this.basePodSpeed = 40;
+            this.podSpeed = this.basePodSpeed;
             this.startGame();
             this.introAudio.play().catch(err => console.error("Audio playback failed:", err));
             this.songs[this.currentSongIndex].play().catch(err => console.error("Song playback failed:", err));
@@ -256,9 +229,8 @@ class PodRacingGame {
         hardButton.addEventListener("click", () => {
             this.difficulty = 'hard';
             this.lives = 5;
-            this.podSpeed = 50;
-            this.enemySpawnInterval = 5;
-            this.maxEnemySpawnsPerLevel = 18;
+            this.basePodSpeed = 50;
+            this.podSpeed = this.basePodSpeed;
             this.startGame();
             this.introAudio.play().catch(err => console.error("Audio playback failed:", err));
             this.songs[this.currentSongIndex].play().catch(err => console.error("Song playback failed:", err));
@@ -311,13 +283,17 @@ class PodRacingGame {
                         this.canvas.requestPointerLock();
                     }
                     break;
-                case 78: // 'N' key to toggle neon square
+                case 78:
                     this.showNeonSquare = !this.showNeonSquare;
                     break;
-                case 72: // 'H' key to toggle debug controls
+                case 72:
                     this.showDebugControls = !this.showDebugControls;
                     const controlsElement = document.getElementById("controls") as HTMLElement;
                     controlsElement.style.display = this.showDebugControls ? "block" : "none";
+                    break;
+                case 82: // 'R' key to toggle pod visibility
+                    this.makePodVisible = !this.makePodVisible;
+                    this.pod.visible = this.makePodVisible;
                     break;
             }
         });
@@ -391,7 +367,6 @@ class PodRacingGame {
             podControls.style.display = "none";
         });
 
-        // Spaceship Model Controls
         const scaleSlider = document.getElementById("spaceshipScale") as HTMLInputElement;
         const posXSlider = document.getElementById("spaceshipPosX") as HTMLInputElement;
         const posYSlider = document.getElementById("spaceshipPosY") as HTMLInputElement;
@@ -471,7 +446,6 @@ class PodRacingGame {
             axisZValue.textContent = this.spaceshipRotationAxisZ.toFixed(2);
         });
 
-        // Enemy Controls
         const spawnDistanceSlider = document.getElementById("spawnDistance") as HTMLInputElement;
         const lateralOffsetSlider = document.getElementById("lateralOffset") as HTMLInputElement;
         const baseSpeedSlider = document.getElementById("baseSpeed") as HTMLInputElement;
@@ -512,12 +486,9 @@ class PodRacingGame {
 
     private updateSpaceshipPosition(): void {
         if (this.spaceship && this.pod) {
-            // Position the spaceship relative to the camera's local coordinate system
-            const offset = new THREE.Vector3(this.spaceshipPositionX, this.spaceshipPositionY, this.spaceshipPositionZ); // X=4, Y=0, Z=7
-            offset.applyQuaternion(this.pod.quaternion); // Apply pod's rotation (camera's orientation)
+            const offset = new THREE.Vector3(this.spaceshipPositionX, this.spaceshipPositionY, this.spaceshipPositionZ);
+            offset.applyQuaternion(this.pod.quaternion);
             this.spaceship.position.copy(this.pod.position).add(offset);
-            
-            // Match the spaceship's rotation to the pod's (camera's) rotation
             this.spaceship.quaternion.copy(this.pod.quaternion);
         }
     }
@@ -641,50 +612,35 @@ class PodRacingGame {
     private async createScene(): Promise<void> {
         this.rng = seedrandom("pod_racing_seed");
 
-// Create blue neon square for shooting limit (static field of view)
-const squareSize = 2; // Size of the square
-const squareGeometry = new THREE.BufferGeometry();
-const squareVertices = new Float32Array([
-    -squareSize, -squareSize, -3, // Bottom-left
-    squareSize, -squareSize, -3,  // Bottom-right
-    squareSize, squareSize, -3,   // Top-right
-    -squareSize, squareSize, -3   // Top-left
-]);
-squareGeometry.setAttribute('position', new THREE.BufferAttribute(squareVertices, 3));
-const squareMaterial = new THREE.LineBasicMaterial({ color: 0x00ffff, emissive: 0x00ffff, emissiveIntensity: 2, linewidth: 2 });
-this.neonSquare = new THREE.LineLoop(squareGeometry, squareMaterial);
-this.neonSquare.visible = false; // Hidden by default, shown in first-person mode
-this.scene.add(this.neonSquare);
+        const squareSize = 3;
+        const squareGeometry = new THREE.BufferGeometry();
+        const squareVertices = new Float32Array([
+            -squareSize, -squareSize, -3,
+            squareSize, -squareSize, -3,
+            squareSize, squareSize, -3,
+            -squareSize, squareSize, -3
+        ]);
+        squareGeometry.setAttribute('position', new THREE.BufferAttribute(squareVertices, 3));
+        const squareMaterial = new THREE.LineBasicMaterial({ color: 0x00ffff, emissive: 0x00ffff, emissiveIntensity: 2, linewidth: 2 });
+        this.neonSquare = new THREE.LineLoop(squareGeometry, squareMaterial);
+        this.neonSquare.visible = false;
+        this.scene.add(this.neonSquare);
 
-        // Create original red box pod (camera/gun)
         const podGeometry = new THREE.BoxGeometry(4, 4, 4);
         const podMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000, metalness: 0.8, roughness: 0.2, emissive: 0x550000, emissiveIntensity: 1.5 });
         this.pod = new THREE.Mesh(podGeometry, podMaterial);
         this.pod.position.set(1500, 0, 0);
+        this.pod.visible = this.makePodVisible; // Invisible by default
         this.scene.add(this.pod);
 
-        // Load spaceship model
         const loader = new GLTFLoader();
-        this.spaceship = await new Promise<THREE.Group>((resolve, reject) => {
-            loader.load(
-                '/assets/spaceship/scene.gltf',
-                (gltf) => resolve(gltf.scene),
-                undefined,
-                (error) => reject(error)
-            );
-        }).catch((error) => {
-            console.error('Failed to load spaceship model:', error);
+        this.spaceship = await loader.loadAsync('/assets/spaceship/scene.gltf').then(gltf => gltf.scene).catch(() => {
             const fallbackGeometry = new THREE.BoxGeometry(4, 4, 4);
             const fallbackMaterial = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
             return new THREE.Group().add(new THREE.Mesh(fallbackGeometry, fallbackMaterial));
         });
 
-        // Set spaceship initial position with fixed offset
-        this.spaceship.position.set(
-            this.pod.position.x + this.spaceshipPositionX,
-            this.pod.position.y + this.spaceshipPositionY,
-            this.pod.position.z + this.spaceshipPositionZ
-        );
+        this.spaceship.position.set(this.pod.position.x + this.spaceshipPositionX, this.pod.position.y + this.spaceshipPositionY, this.pod.position.z + this.spaceshipPositionZ);
         this.spaceship.scale.set(this.spaceshipScale, this.spaceshipScale, this.spaceshipScale);
         this.spaceship.rotation.set(this.spaceshipRotationX, this.spaceshipRotationY, this.spaceshipRotationZ);
         this.scene.add(this.spaceship);
@@ -694,42 +650,18 @@ this.scene.add(this.neonSquare);
         this.podBody.position.copy(this.pod.position);
         this.world.addBody(this.podBody);
 
-        const points = [
-            new THREE.Vector3(1500, 0, 0),
-            new THREE.Vector3(1200, 100, 300),
-            new THREE.Vector3(800, 200, 600),
-            new THREE.Vector3(400, 300, 900),
-            new THREE.Vector3(0, 400, 1200),
-            new THREE.Vector3(-400, 300, 1500),
-            new THREE.Vector3(-800, 200, 1800),
-            new THREE.Vector3(-1200, 100, 2100),
-            new THREE.Vector3(-1500, 0, 2400),
-            new THREE.Vector3(-1200, -100, 2700),
-            new THREE.Vector3(-800, -200, 3000),
-            new THREE.Vector3(-400, -300, 3300),
-            new THREE.Vector3(0, -400, 3600),
-            new THREE.Vector3(400, -300, 3900),
-            new THREE.Vector3(800, -200, 4200),
-            new THREE.Vector3(1200, -100, 4500),
-            new THREE.Vector3(1500, 0, 4800),
-            new THREE.Vector3(1200, 100, 5100),
-            new THREE.Vector3(800, 200, 5400),
-            new THREE.Vector3(400, 300, 5700),
-            new THREE.Vector3(0, 400, 6000),
-            new THREE.Vector3(-400, 300, 6300),
-            new THREE.Vector3(-800, 200, 6600),
-            new THREE.Vector3(-1200, 100, 6900),
-            new THREE.Vector3(-1500, 0, 7200),
-            new THREE.Vector3(-1200, -100, 7500),
-            new THREE.Vector3(-800, -200, 7800),
-            new THREE.Vector3(-400, -300, 8100),
-            new THREE.Vector3(0, -400, 8400),
-            new THREE.Vector3(400, -300, 8700),
-            new THREE.Vector3(800, -200, 9000),
-            new THREE.Vector3(1200, -100, 9300),
-            new THREE.Vector3(1500, 0, 9600)
-        ];
-        this.trackPath = new THREE.CatmullRomCurve3(points, true, 'centripetal', 0.5);
+        // Track length adjusted for 2-minute duration (120 seconds)
+        const trackLength = this.basePodSpeed * 120; // Distance = speed * time
+        const points = [];
+        const numPoints = 33;
+        for (let i = 0; i < numPoints; i++) {
+            const t = i / (numPoints - 1);
+            const x = 1500 * Math.cos(t * 4 * Math.PI);
+            const y = 400 * Math.sin(t * 4 * Math.PI);
+            const z = t * trackLength;
+            points.push(new THREE.Vector3(x, y, z));
+        }
+        this.trackPath = new THREE.CatmullRomCurve3(points, false, 'centripetal', 0.5);
 
         const pathPoints = this.trackPath.getPoints(512);
         const pathGeometry = new THREE.BufferGeometry().setFromPoints(pathPoints);
@@ -761,27 +693,6 @@ this.scene.add(this.neonSquare);
             this.world.addBody(obstacleBody);
 
             this.obstacles.push({ mesh: asteroid, body: obstacleBody, isFullAsteroid: true });
-        }
-
-        const boostGeometry = new THREE.TorusGeometry(1, 0.3, 16, 32);
-        for (let i = 0; i < 50; i++) {
-            const boost = new THREE.Mesh(boostGeometry, new THREE.MeshStandardMaterial({ color: 0xff00ff, emissive: 0xff00ff, emissiveIntensity: 2 }));
-            const t = i / 50;
-            const basePos = this.trackPath.getPointAt(t);
-            const tangent = this.trackPath.getTangentAt(t);
-            const offsetX = (this.rng() - 0.5) * 10;
-            const offsetY = (this.rng() - 0.5) * 10;
-            const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
-            const binormal = tangent.clone().cross(normal).normalize();
-            boost.position.copy(basePos).addScaledVector(normal, offsetX).addScaledVector(binormal, offsetY);
-            boost.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), tangent);
-            this.scene.add(boost);
-
-            const boostBody = new CANNON.Body({ mass: 0 });
-            boostBody.addShape(new CANNON.Box(new CANNON.Vec3(1, 1, 0.3)));
-            boostBody.position.copy(boost.position);
-            this.world.addBody(boostBody);
-            this.speedBoosts.push({ mesh: boost, body: boostBody });
         }
 
         const starGeometry = new THREE.BufferGeometry();
@@ -860,8 +771,7 @@ this.scene.add(this.neonSquare);
         sun.position.copy(sunLight.position);
         this.scene.add(sun);
 
-        const glareTexture = new THREE.TextureLoader().load('/assets/textures/glare.png', undefined, undefined, () => {
-            console.error("Glare texture not found, using fallback");
+        const glareTexture = textureLoader.load('/assets/textures/glare.png', undefined, undefined, () => {
             const canvas = document.createElement('canvas');
             canvas.width = 64;
             canvas.height = 64;
@@ -892,8 +802,18 @@ this.scene.add(this.neonSquare);
         const particleMaterial = new THREE.PointsMaterial({ color: 0xff0000, size: 2, transparent: true });
         this.thrusterParticles = new THREE.Points(particleGeometry, particleMaterial);
 
+        const hitParticleGeometry = new THREE.BufferGeometry();
+        const hitParticlePositions = new Float32Array(particleCount * 3);
+        hitParticleGeometry.setAttribute('position', new THREE.BufferAttribute(hitParticlePositions, 3));
+        const hitParticleMaterial = new THREE.PointsMaterial({ color: 0xff0000, size: 3, transparent: true });
+        this.hitParticles = new THREE.Points(hitParticleGeometry, hitParticleMaterial);
+        this.scene.add(this.hitParticles);
+
         this.dynamicLight = new THREE.PointLight(0xffffff, 5, 20000);
         this.scene.add(this.dynamicLight);
+
+        // Adjust pod speed for current level
+        this.podSpeed = this.basePodSpeed * (1 + (this.level - 1) * 0.01); // 1% increase per level
     }
 
     private addAdditionalPlanets(): void {
@@ -990,24 +910,71 @@ this.scene.add(this.neonSquare);
         this.explosionSound.play().catch(err => console.error("Explosion sound failed:", err));
     }
 
+    private triggerHitParticles(): void {
+        const particleCount = 50;
+        const positions = this.hitParticles.geometry.attributes.position.array as Float32Array;
+        const velocities: THREE.Vector3[] = [];
+
+        for (let i = 0; i < particleCount; i++) {
+            positions[i * 3] = this.pod.position.x;
+            positions[i * 3 + 1] = this.pod.position.y;
+            positions[i * 3 + 2] = this.pod.position.z;
+
+            const velocity = new THREE.Vector3(
+                (this.rng() - 0.5) * 20,
+                (this.rng() - 0.5) * 20,
+                (this.rng() - 0.5) * 20
+            ).normalize().multiplyScalar(10 + this.rng() * 10);
+            velocities.push(velocity);
+        }
+
+        this.hitParticles.userData = { velocities, lifetimes: new Array(particleCount).fill(1.0) };
+        this.hitParticles.geometry.attributes.position.needsUpdate = true;
+    }
+
+    private updateHitParticles(deltaTime: number): void {
+        if (!this.hitParticles.userData.velocities) return;
+
+        const positions = this.hitParticles.geometry.attributes.position.array as Float32Array;
+        const velocities = this.hitParticles.userData.velocities as THREE.Vector3[];
+        const lifetimes = this.hitParticles.userData.lifetimes as number[];
+        let allExpired = true;
+
+        for (let i = 0; i < positions.length / 3; i++) {
+            if (lifetimes[i] > 0) {
+                positions[i * 3] += velocities[i].x * deltaTime;
+                positions[i * 3 + 1] += velocities[i].y * deltaTime;
+                positions[i * 3 + 2] += velocities[i].z * deltaTime;
+                lifetimes[i] -= deltaTime;
+                allExpired = false;
+            }
+        }
+
+        this.hitParticles.geometry.attributes.position.needsUpdate = true;
+        const material = this.hitParticles.material as THREE.PointsMaterial;
+        material.opacity = Math.max(0, lifetimes[0] / 1.0);
+
+        if (allExpired) {
+            this.hitParticles.userData = {};
+        }
+    }
+
     private animate(): void {
         requestAnimationFrame(() => this.animate());
-        
-       // Update spaceship position and orientation (fixed relative to camera)
-    this.updateSpaceshipPosition();
 
-    // Update neon square position and orientation (fixed relative to path)
-    const tangentSpaship = this.trackPath.getTangentAt(this.podDistance / this.trackPath.getLength());
-    if (this.cameraMode === 0) {
-        this.neonSquare.visible = true;
-        this.neonSquare.position.copy(this.pod.position).addScaledVector(tangentSpaship, -3);
-        const tangentNeon = this.trackPath.getTangentAt(this.podDistance / this.trackPath.getLength());
-        const quaternionNeon = new THREE.Quaternion();
-        quaternionNeon.setFromUnitVectors(new THREE.Vector3(0, 0, -1), tangentNeon);
-        this.neonSquare.quaternion.copy(quaternionNeon);
-    } else {
-        this.neonSquare.visible = false;
-    }
+        this.updateSpaceshipPosition();
+
+        const tangentSpaship = this.trackPath.getTangentAt(this.podDistance / this.trackPath.getLength());
+        if (this.cameraMode === 0) {
+            this.neonSquare.visible = true;
+            this.neonSquare.position.copy(this.pod.position).addScaledVector(tangentSpaship, -3);
+            const tangentNeon = this.trackPath.getTangentAt(this.podDistance / this.trackPath.getLength());
+            const quaternionNeon = new THREE.Quaternion();
+            quaternionNeon.setFromUnitVectors(new THREE.Vector3(0, 0, -1), tangentNeon);
+            this.neonSquare.quaternion.copy(quaternionNeon);
+        } else {
+            this.neonSquare.visible = false;
+        }
 
         if (this.isPaused) {
             this.renderer.render(this.scene, this.camera);
@@ -1068,7 +1035,7 @@ this.scene.add(this.neonSquare);
 
             this.countdownTimer += deltaTime;
             const timeLeft = Math.max(0, this.countdown - this.countdownTimer);
-            this.countdownElement.textContent = timeLeft > 0 ? `${Math.ceil(timeLeft)}` : "Go!";
+            this.countdownElement.textContent = timeLeft > 0 ? `${Math.ceil(timeLeft)}` : `Level ${this.level} - Go!`;
             this.renderer.render(this.scene, this.camera);
 
             if (timeLeft <= 0) {
@@ -1081,14 +1048,12 @@ this.scene.add(this.neonSquare);
 
         this.survivalTime += deltaTime;
         this.score += this.podSpeed * deltaTime;
-        if (this.survivalTime % (100 / 10) < deltaTime) {
-            this.podSpeed += 0.6;
-            console.log(`Speed increased to ${this.podSpeed}`);
-        }
 
         const trackLength = this.trackPath.getLength();
         this.podDistance += this.podSpeed * deltaTime;
-        if (this.podDistance > trackLength) {
+
+        // Check for level completion (2 minutes = 120 seconds)
+        if (this.podDistance >= trackLength) {
             this.level += 1;
             if (this.level > 100) {
                 alert("Congratulations! You’ve won the game!");
@@ -1098,16 +1063,14 @@ this.scene.add(this.neonSquare);
             }
             this.podDistance = 0;
             this.survivalTime = 0;
+            this.podSpeed = this.basePodSpeed * (1 + (this.level - 1) * 0.01); // Increase speed by 1% per level
             this.scene.remove(this.pathLine);
             this.obstacles.forEach(o => {
                 this.scene.remove(o.mesh);
                 this.world.removeBody(o.body);
                 if (o.body.userData?.debugMesh) this.scene.remove(o.body.userData.debugMesh);
             });
-            this.speedBoosts.forEach(b => {
-                this.scene.remove(b.mesh);
-                this.world.removeBody(b.body);
-            });
+
             this.enemyShips.forEach(enemy => {
                 this.scene.remove(enemy.mesh);
                 this.world.removeBody(enemy.body);
@@ -1120,7 +1083,6 @@ this.scene.add(this.neonSquare);
                 this.scene.remove(instance.particles);
             });
             this.obstacles = [];
-            this.speedBoosts = [];
             this.bullets = [];
             this.enemyShips = [];
             this.enemyBullets = [];
@@ -1132,6 +1094,8 @@ this.scene.add(this.neonSquare);
             this.alertsThisLevel = 0;
             this.createScene();
             this.pathLine.visible = this.showPathLine;
+            this.startCountdown(); // Start countdown for next level
+            return;
         }
 
         const t = this.podDistance / trackLength;
@@ -1162,7 +1126,6 @@ this.scene.add(this.neonSquare);
         this.podBody.position.copy(podPos);
         this.pod.position.copy(this.podBody.position);
 
-        // Pod (camera/gun) reacts to mouse movement
         const quaternionPod = new THREE.Quaternion();
         quaternionPod.setFromUnitVectors(new THREE.Vector3(0, 0, -1), tangent);
         const yawQuatPod = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
@@ -1189,26 +1152,25 @@ this.scene.add(this.neonSquare);
             case 0:
                 this.camera.position.copy(this.pod.position).addScaledVector(tangent, -2);
                 this.camera.quaternion.copy(this.pod.quaternion);
-                // Show and position the neon square at a fixed offset, aligned with the path, if enabled
                 this.neonSquare.visible = this.showNeonSquare;
                 if (this.showNeonSquare) {
                     this.neonSquare.position.copy(this.pod.position).addScaledVector(tangent, -3);
-                    const tangentNeon = this.trackPath.getTangentAt(this.podDistance / this.trackPath.getLength());
+                    const tangentNeon = this.trackPath.getTangentAt(this.podDistance / trackLength);
                     const quaternionNeon = new THREE.Quaternion();
                     quaternionNeon.setFromUnitVectors(new THREE.Vector3(0, 0, -1), tangentNeon);
                     this.neonSquare.quaternion.copy(quaternionNeon);
                 }
                 break;
-                case 1:
-                    this.camera.position.copy(this.pod.position).addScaledVector(tangent.negate(), 15).addScaledVector(normal, 5);
-                    this.camera.lookAt(this.pod.position);
-                    this.neonSquare.visible = false;
-                    break;
-                case 2:
-                    this.camera.position.set(0, 25000, 0);
-                    this.camera.lookAt(new THREE.Vector3(0, 0, 0));
-                    this.neonSquare.visible = false;
-                    break;
+            case 1:
+                this.camera.position.copy(this.pod.position).addScaledVector(tangent.negate(), 15).addScaledVector(normal, 5);
+                this.camera.lookAt(this.pod.position);
+                this.neonSquare.visible = false;
+                break;
+            case 2:
+                this.camera.position.set(0, 25000, 0);
+                this.camera.lookAt(new THREE.Vector3(0, 0, 0));
+                this.neonSquare.visible = false;
+                break;
         }
 
         this.earth.rotation.y += 0.001;
@@ -1315,6 +1277,7 @@ this.scene.add(this.neonSquare);
                 this.obstacles.splice(i, 1);
                 this.lives -= 1;
                 this.podSpeed *= 0.8;
+                this.triggerHitParticles();
                 if (this.lives <= 0) {
                     this.isPaused = true;
                     this.pauseMenu.style.display = "block";
@@ -1322,17 +1285,6 @@ this.scene.add(this.neonSquare);
                 }
             }
         }
-
-        this.speedBoosts.forEach((boost, index) => {
-            if (!boost.mesh || !boost.body) return;
-            if (this.pod.position.distanceTo(boost.mesh.position) < 2.5) {
-                this.podSpeed += 20;
-                this.scene.remove(boost.mesh);
-                this.world.removeBody(boost.body);
-                this.speedBoosts.splice(index, 1);
-                this.score += 100;
-            }
-        });
 
         this.asteroidSpawnTimer += deltaTime;
         const spawnInterval = this.asteroidSpawnInterval * (1 - (this.level - 1) / 100);
@@ -1366,18 +1318,35 @@ this.scene.add(this.neonSquare);
             this.asteroidSpawnTimer = this.asteroidSpawnTimer % spawnInterval;
         }
 
+        // Enemy spawning: 3 at level 1 to 20 at level 100
         this.enemySpawnTimer += deltaTime;
-        if (this.enemySpawnTimer > this.enemySpawnInterval && this.enemySpawnsThisLevel < this.maxEnemySpawnsPerLevel) {
-            if (this.rng() < 0.3) {
-                this.spawnEnemyShip();
+        if (this.enemySpawnTimer >= this.enemySpawnInterval) {
+            const enemyCount = Math.floor(3 + (this.level - 1) * (17 / 99)); // Linear increase from 3 to 20
+            for (let i = 0; i < enemyCount; i++) {
+                if (this.rng() < 0.5) { // Random chance to spawn
+                    this.spawnEnemyShip();
+                }
             }
             this.enemySpawnTimer = 0;
+        }
+
+        function makeDistortionCurve(amount) {
+            const samples = 44100;
+            const curve = new Float32Array(samples);
+            const deg = Math.PI / 180;
+            
+            for (let i = 0; i < samples; ++i) {
+                const x = i * 2 / samples - 1;
+                curve[i] = (3 + amount) * x * 20 * deg / (Math.PI + amount * Math.abs(x));
+            }
+            
+            return curve;
         }
 
         for (let i = this.enemyShips.length - 1; i >= 0; i--) {
             const enemy = this.enemyShips[i];
             enemy.mesh.position.copy(enemy.body.position);
-
+        
             const distanceToPod = enemy.mesh.position.distanceTo(this.pod.position);
             const speed = this.enemyBaseSpeed * (1 + (this.enemySpawnDistance - distanceToPod) / this.enemySpawnDistance);
             const directionToPod = this.pod.position.clone().sub(enemy.mesh.position).normalize();
@@ -1389,28 +1358,48 @@ this.scene.add(this.neonSquare);
             );
             directionToPod.add(erraticOffset).normalize();
             enemy.body.velocity.set(directionToPod.x * speed, directionToPod.y * speed, directionToPod.z * speed);
-
+        
             const currentTime = performance.now();
             const lastShotTime = this.lastEnemyShotTimes.get(enemy.body) || 0;
             let shotsFired = this.enemyShotCounts.get(enemy.body) || 0;
             if (currentTime - lastShotTime > this.enemyFireRate && shotsFired < this.shotsToLoseLife) {
+                const oscillator = this.audioContext.createOscillator();
+                oscillator.type = 'sawtooth';
+                oscillator.frequency.setValueAtTime(2500, this.audioContext.currentTime);
+                oscillator.frequency.exponentialRampToValueAtTime(800, this.audioContext.currentTime + 0.15);
+                const gainNode = this.audioContext.createGain();
+                gainNode.gain.setValueAtTime(0.2, this.audioContext.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.2);
+                const filter = this.audioContext.createBiquadFilter();
+                filter.type = 'bandpass';
+                filter.frequency.setValueAtTime(3500, this.audioContext.currentTime);
+                filter.Q.value = 15;
+                const distortion = this.audioContext.createWaveShaper();
+                distortion.curve = makeDistortionCurve(50);
+                oscillator.connect(filter);
+                filter.connect(distortion);
+                distortion.connect(gainNode);
+                gainNode.connect(this.audioContext.destination);
+                oscillator.start();
+                oscillator.stop(this.audioContext.currentTime + 0.25);
+        
                 const bulletGeometry = new THREE.SphereGeometry(1, 8, 8);
                 const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
                 const bulletMesh = new THREE.Mesh(bulletGeometry, bulletMaterial);
                 bulletMesh.position.copy(enemy.mesh.position).add(directionToPod.clone().multiplyScalar(8));
                 this.scene.add(bulletMesh);
-
+        
                 const bulletBody = new CANNON.Body({ mass: 1 });
                 bulletBody.addShape(new CANNON.Sphere(1));
                 bulletBody.position.copy(bulletMesh.position);
                 bulletBody.velocity.set(directionToPod.x * this.enemyBulletSpeed, directionToPod.y * this.enemyBulletSpeed, directionToPod.z * this.enemyBulletSpeed);
                 this.world.addBody(bulletBody);
-
+        
                 this.enemyBullets.push({ mesh: bulletMesh, body: bulletBody });
                 this.lastEnemyShotTimes.set(enemy.body, currentTime);
                 shotsFired++;
                 this.enemyShotCounts.set(enemy.body, shotsFired);
-
+        
                 if (shotsFired >= this.shotsToLoseLife) {
                     this.scene.remove(enemy.mesh);
                     this.world.removeBody(enemy.body);
@@ -1443,6 +1432,7 @@ this.scene.add(this.neonSquare);
 
             if (distanceToPod < 12) {
                 this.lives -= 2;
+                this.triggerHitParticles();
                 this.scene.remove(enemy.mesh);
                 this.world.removeBody(enemy.body);
                 this.lastEnemyShotTimes.delete(enemy.body);
@@ -1456,6 +1446,7 @@ this.scene.add(this.neonSquare);
                 }
             } else if (distanceToPod > 1000 && shotsFired < this.shotsToLoseLife) {
                 this.lives -= 1;
+                this.triggerHitParticles();
                 this.scene.remove(enemy.mesh);
                 this.world.removeBody(enemy.body);
                 this.lastEnemyShotTimes.delete(enemy.body);
@@ -1487,6 +1478,7 @@ this.scene.add(this.neonSquare);
                 this.enemyHits.set(firingEnemy, hits);
                 if (hits >= this.shotsToLoseLife) {
                     this.lives -= 1;
+                    this.triggerHitParticles();
                     this.enemyHits.set(firingEnemy, 0);
                     if (this.lives <= 0) {
                         this.isPaused = true;
@@ -1535,14 +1527,23 @@ this.scene.add(this.neonSquare);
             }
         }
 
+        // Update hit particles
+        this.updateHitParticles(deltaTime);
+
         const progress = (this.podDistance / trackLength) * 100;
         const progressBar = document.getElementById("progressBar") as HTMLElement;
         if (progressBar) {
-            progressBar.style.width = `${progress}%`;
+            progressBar.style.setProperty('--progress-width', `${progress}%`); // Update CSS variable for ::before
+            const progressText = progressBar.querySelector('span') as HTMLElement;
+            if (progressText) {
+                progressText.textContent = `${Math.floor(progress)}%`; // Update percentage text
+            }
         }
-
+    
         this.updateHUD();
         this.renderer.render(this.scene, this.camera);
+    
+
     }
 
     private updateHUD(): void {
