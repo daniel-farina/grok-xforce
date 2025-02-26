@@ -140,6 +140,9 @@ class PodRacingGame {
     private backgroundMusicGain!: GainNode;
     private backgroundMusicVolume: number = 0.09; // New private variable, default 20%
     private isEngineSoundStarted: boolean = false;
+private laserSound: HTMLAudioElement = new Audio('/assets/laser.mp3');
+// Add this as a private class property near other audio-related properties (e.g., after `explosionSound`)
+private enemyLaserSound: HTMLAudioElement = new Audio('/assets/laser2.mp3');
     constructor() {
         this.initialize().then(() => {
             console.log("Game initialized");
@@ -687,22 +690,16 @@ class PodRacingGame {
         return new THREE.Mesh(geometry, material);
     }
 
+    // Replace the oscillator sound code in the `shootBullet` method with this
     private shootBullet(): void {
         const currentTime = performance.now();
         if (currentTime - this.lastShotTime < this.fireRate) return;
         this.lastShotTime = currentTime;
 
-        const oscillator = this.audioContext.createOscillator();
-        const gainNode = this.audioContext.createGain();
-        oscillator.type = 'square';
-        oscillator.frequency.setValueAtTime(600, this.audioContext.currentTime);
-        oscillator.frequency.exponentialRampToValueAtTime(300, this.audioContext.currentTime + 0.05);
-        gainNode.gain.setValueAtTime(0.3, this.audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.1);
-        oscillator.connect(gainNode);
-        gainNode.connect(this.audioContext.destination);
-        oscillator.start();
-        oscillator.stop(this.audioContext.currentTime + 0.1);
+        // Clone the laser sound to allow overlapping plays
+        const laserClone = this.laserSound.cloneNode(true) as HTMLAudioElement;
+        laserClone.volume = 0.5; // Adjust volume as needed (0.0 to 1.0)
+        laserClone.play().catch(err => console.error("Laser sound playback failed:", err));
 
         const bulletGeometry = new THREE.SphereGeometry(1, 16, 16);
         const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00, emissive: 0xffff00, emissiveIntensity: 3 });
@@ -1034,6 +1031,7 @@ class PodRacingGame {
         });
     }
 
+    // Replace the explosion sound in triggerEnemyExplosion
     private triggerEnemyExplosion(position: THREE.Vector3): void {
         const explosionParticleCount = 100;
         const explosionGeometry = new THREE.BufferGeometry();
@@ -1071,7 +1069,10 @@ class PodRacingGame {
         this.scene.add(particles);
         this.explosionInstances.push({ particles, velocities, lifetimes, duration });
 
-        this.explosionSound.play().catch(err => console.error("Explosion sound failed:", err));
+        // Clone the explosion sound to allow overlapping plays
+        const explosionClone = this.explosionSound.cloneNode(true) as HTMLAudioElement;
+        explosionClone.volume = 0.5; // Adjust volume as needed
+        explosionClone.play().catch(err => console.error("Explosion sound playback failed:", err));
     }
 
     private triggerHitParticles(): void {
@@ -1517,43 +1518,28 @@ class PodRacingGame {
             const lastShotTime = this.lastEnemyShotTimes.get(enemy.body) || 0;
             let shotsFired = this.enemyShotCounts.get(enemy.body) || 0;
             if (currentTime - lastShotTime > this.enemyFireRate && shotsFired < this.shotsToLoseLife) {
-                const oscillator = this.audioContext.createOscillator();
-                oscillator.type = 'sawtooth';
-                oscillator.frequency.setValueAtTime(2500, this.audioContext.currentTime);
-                oscillator.frequency.exponentialRampToValueAtTime(800, this.audioContext.currentTime + 0.15);
-                const gainNode = this.audioContext.createGain();
-                gainNode.gain.setValueAtTime(0.2, this.audioContext.currentTime);
-                gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.2);
-                const filter = this.audioContext.createBiquadFilter();
-                filter.type = 'bandpass';
-                filter.frequency.setValueAtTime(3500, this.audioContext.currentTime);
-                filter.Q.value = 15;
-                const distortion = this.audioContext.createWaveShaper();
-                distortion.curve = makeDistortionCurve(50);
-                oscillator.connect(filter);
-                filter.connect(distortion);
-                distortion.connect(gainNode);
-                gainNode.connect(this.audioContext.destination);
-                oscillator.start();
-                oscillator.stop(this.audioContext.currentTime + 0.25);
-    
+                // Clone the enemy laser sound to allow overlapping plays
+                const laserClone = this.enemyLaserSound.cloneNode(true) as HTMLAudioElement;
+                laserClone.volume = 0.5; // Adjust volume as needed
+                laserClone.play().catch(err => console.error("Enemy laser sound playback failed:", err));
+            
                 const bulletGeometry = new THREE.SphereGeometry(1, 8, 8);
                 const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
                 const bulletMesh = new THREE.Mesh(bulletGeometry, bulletMaterial);
                 bulletMesh.position.copy(enemy.mesh.position).add(directionToPod.clone().multiplyScalar(8));
                 this.scene.add(bulletMesh);
-    
+            
                 const bulletBody = new CANNON.Body({ mass: 1 });
                 bulletBody.addShape(new CANNON.Sphere(1));
                 bulletBody.position.copy(bulletMesh.position);
                 bulletBody.velocity.set(directionToPod.x * this.enemyBulletSpeed, directionToPod.y * this.enemyBulletSpeed, directionToPod.z * this.enemyBulletSpeed);
                 this.world.addBody(bulletBody);
-    
+            
                 this.enemyBullets.push({ mesh: bulletMesh, body: bulletBody });
                 this.lastEnemyShotTimes.set(enemy.body, currentTime);
                 shotsFired++;
                 this.enemyShotCounts.set(enemy.body, shotsFired);
-    
+            
                 if (shotsFired >= this.shotsToLoseLife) {
                     this.scene.remove(enemy.mesh);
                     this.world.removeBody(enemy.body);
