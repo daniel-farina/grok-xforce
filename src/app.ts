@@ -138,6 +138,7 @@ class PodRacingGame {
     private spaceshipEngineGain!: GainNode; // Gain node for volume control
     private spaceshipEngineFilter!: BiquadFilterNode; // New filter node
     private backgroundMusicGain!: GainNode;
+    private backgroundMusicVolume: number = 0.09; // New private variable, default 20%
     private isEngineSoundStarted: boolean = false;
     constructor() {
         this.initialize().then(() => {
@@ -162,7 +163,7 @@ class PodRacingGame {
     // Oscillator settings
     this.spaceshipEngineOscillator.type = 'sawtooth';
     this.spaceshipEngineOscillator.frequency.setValueAtTime(70, this.audioContext.currentTime);
-    this.spaceshipEngineGain.gain.setValueAtTime(0.01, this.audioContext.currentTime);
+    this.spaceshipEngineGain.gain.setValueAtTime(0.0025, this.audioContext.currentTime);
 
     // Filter settings
     this.spaceshipEngineFilter.type = 'lowpass';
@@ -174,14 +175,20 @@ class PodRacingGame {
     this.spaceshipEngineFilter.connect(this.spaceshipEngineGain);
     this.spaceshipEngineGain.connect(this.audioContext.destination);
 
-    this.spaceshipEngineOscillator.start();
     
         this.songs = [
             new Audio('/assets/music1.mp3'),
             new Audio('/assets/music2.mp3'),
             new Audio('/assets/music3.mp3')
         ];
-        this.songs.forEach(song => {
+        this.audioContext = new AudioContext();
+        this.backgroundMusicGain = this.audioContext.createGain();
+        this.backgroundMusicGain.gain.setValueAtTime(this.backgroundMusicVolume, this.audioContext.currentTime); // Use private variable
+        this.backgroundMusicGain.connect(this.audioContext.destination);
+    
+        this.songs.forEach((song, index) => {
+            const source = this.audioContext.createMediaElementSource(song);
+            source.connect(this.backgroundMusicGain);
             song.addEventListener('ended', () => {
                 this.currentSongIndex = (this.currentSongIndex + 1) % this.songs.length;
                 this.songs[this.currentSongIndex].play().catch(err => console.error("Song playback failed:", err));
@@ -280,12 +287,16 @@ class PodRacingGame {
             this.introAudio.play().catch(err => console.error("Audio playback failed:", err));
             this.songs[this.currentSongIndex].play().catch(err => console.error("Song playback failed:", err));
         });
+
+        
     }
 
     private startGame(): void {
         this.difficultyMenu.style.display = "none";
         this.createScene().then(() => {
             this.animate();
+    this.spaceshipEngineOscillator.start();
+
         });
         window.addEventListener('resize', () => this.handleResize());
     }
@@ -354,6 +365,11 @@ class PodRacingGame {
                         document.exitPointerLock();
                     } else {
                         this.canvas.requestPointerLock();
+                        // Start engine sound after countdown
+                        if (!this.isEngineSoundStarted) {
+                            this.spaceshipEngineOscillator.start();
+                            this.isEngineSoundStarted = true;
+                        }
                     }
                     break;
                 case 78:
