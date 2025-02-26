@@ -143,6 +143,13 @@ class PodRacingGame {
 private laserSound: HTMLAudioElement = new Audio('/assets/laser.mp3');
 // Add this as a private class property near other audio-related properties (e.g., after `explosionSound`)
 private enemyLaserSound: HTMLAudioElement = new Audio('/assets/laser2.mp3');
+private enemyBurstStates: Map<CANNON.Body, { isBursting: boolean; burstCount: number; burstDelay: number; lastBurstTime: number }> = new Map();
+private enemyDamageCooldowns: Map<CANNON.Body, number> = new Map(); // Tracks when next damage is allowed
+private burstInterval: number = 0.2; // Time between shots in a burst (e.g., 200ms)
+private minBurstDelay: number = 0.5; // Min delay between bursts
+private maxBurstDelay: number = 2.0; // Max delay between bursts
+
+
     constructor() {
         this.initialize().then(() => {
             console.log("Game initialized");
@@ -177,6 +184,8 @@ private enemyLaserSound: HTMLAudioElement = new Audio('/assets/laser2.mp3');
     this.spaceshipEngineOscillator.connect(this.spaceshipEngineFilter);
     this.spaceshipEngineFilter.connect(this.spaceshipEngineGain);
     this.spaceshipEngineGain.connect(this.audioContext.destination);
+
+    this.isEngineSoundStarted = false; 
 
     
         this.songs = [
@@ -218,7 +227,7 @@ private enemyLaserSound: HTMLAudioElement = new Audio('/assets/laser2.mp3');
         controlsElement.style.display = this.showDebugControls ? "block" : "none"; // Off by default
     
         const textureLoader = new THREE.TextureLoader();
-        this.asteroidTexture = await textureLoader.loadAsync('/assets/asteroid/asteroid_texture.jpg').catch(() => null);
+        this.asteroidTexture = await textureLoader.loadAsync('/assets/asteroid.jpg').catch(() => null);
         this.metalTexture = await textureLoader.loadAsync('/assets/metal.png').catch(() => null);
     }
 
@@ -298,8 +307,10 @@ private enemyLaserSound: HTMLAudioElement = new Audio('/assets/laser2.mp3');
         this.difficultyMenu.style.display = "none";
         this.createScene().then(() => {
             this.animate();
-    this.spaceshipEngineOscillator.start();
-
+            if (!this.isEngineSoundStarted) {
+                this.spaceshipEngineOscillator.start();
+                this.isEngineSoundStarted = true;
+            }
         });
         window.addEventListener('resize', () => this.handleResize());
     }
@@ -662,31 +673,101 @@ private enemyLaserSound: HTMLAudioElement = new Audio('/assets/laser2.mp3');
 
     private generateAsteroid(scaleFactor: number): THREE.Mesh {
         const baseRadius = 40;
-        const geometry = new THREE.SphereGeometry(baseRadius * scaleFactor, 16, 16);
+        const segments = 32; // Keep higher resolution for detail
+        const geometry = new THREE.SphereGeometry(baseRadius * scaleFactor, segments, segments);
         const positions = geometry.attributes.position.array as Float32Array;
         const noise = createNoise3D();
-
+        const vertices = geometry.attributes.position.count;
+    
+        // Step 1: Initial deformation to break spherical shape
         for (let i = 0; i < positions.length; i += 3) {
             const x = positions[i];
             const y = positions[i + 1];
             const z = positions[i + 2];
-            const noiseValue = noise(x * 0.1, y * 0.1, z * 0.1) * 10;
-            positions[i] += noiseValue * (x / baseRadius);
-            positions[i + 1] += noiseValue * (y / baseRadius);
-            positions[i + 2] += noiseValue * (z / baseRadius);
+            const vertex = new THREE.Vector3(x, y, z);
+            const distance = vertex.length();
+            
+            // Low-frequency noise for overall shape deformation
+            const deformNoise = noise(x * 0.02, y * 0.02, z * 0.02) * 15; // Larger-scale deformation
+            vertex.normalize().multiplyScalar(distance + deformNoise);
+            
+            positions[i] = vertex.x;
+            positions[i + 1] = vertex.y;
+            positions[i + 2] = vertex.z;
         }
+    
+        // Step 2: Scraping for more, smaller craters/flat spots
+        const scrapeCount = Math.floor(15 + Math.random() * 15); // 15 to 30 scrapes (5x more)
+        const scrapedVertices = new Set<number>();
+    
+        for (let scrape = 0; scrape < scrapeCount; scrape++) {
+            // Random point on sphere as scrape center
+            const theta = Math.random() * 2 * Math.PI;
+            const phi = Math.acos(2 * Math.random() - 1);
+            const scrapeCenter = new THREE.Vector3(
+                Math.sin(phi) * Math.cos(theta),
+                Math.sin(phi) * Math.sin(theta),
+                Math.cos(phi)
+            ).normalize();
+    
+            // Smaller scrape parameters
+            const scrapeRadius = 0.06 + Math.random() * 0.11; // 0.06 to 0.17 radians (~3° to 10°, 3–5x smaller)
+            const scrapeDepth = baseRadius * (0.05 + Math.random() * 0.1); // Depth: 5% to 15% of radius, scaled down
+    
+            for (let i = 0; i < vertices; i++) {
+                const x = positions[i * 3];
+                const y = positions[i * 3 + 1];
+                const z = positions[i * 3 + 2];
+                const vertex = new THREE.Vector3(x, y, z).normalize();
+                
+                // Calculate angular distance
+                const angle = Math.acos(vertex.dot(scrapeCenter));
+                if (angle < scrapeRadius) {
+                    const distance = new THREE.Vector3(x, y, z).length();
+                    const newDistance = distance - scrapeDepth * (1 - angle / scrapeRadius);
+                    vertex.multiplyScalar(newDistance / distance);
+                    positions[i * 3] = vertex.x;
+                    positions[i * 3 + 1] = vertex.y;
+                    positions[i * 3 + 2] = vertex.z;
+                    scrapedVertices.add(i);
+                }
+            }
+        }
+    
+        // Step 3: Apply layered noise for surface detail
+        for (let i = 0; i < positions.length; i += 3) {
+            const x = positions[i];
+            const y = positions[i + 1];
+            const z = positions[i + 2];
+            const vertex = new THREE.Vector3(x, y, z);
+            const distance = vertex.length();
+    
+            // Adjusted noise layers: coarse and fine
+            const coarseNoise = noise(x * 0.05, y * 0.05, z * 0.05) * 8;  // Reduced amplitude for balance
+            const fineNoise = noise(x * 0.2, y * 0.2, z * 0.2) * 2;     // Fine details
+            const noiseValue = coarseNoise + fineNoise;
+    
+            // Slightly less amplification on scraped areas
+            const amplification = scrapedVertices.has(i / 3) ? 0.7 : 1.0;
+            vertex.normalize().multiplyScalar(distance + noiseValue * amplification * (vertex.length() / baseRadius));
+            
+            positions[i] = vertex.x;
+            positions[i + 1] = vertex.y;
+            positions[i + 2] = vertex.z;
+        }
+    
         geometry.computeVertexNormals();
-
+    
         const material = new THREE.MeshStandardMaterial({
             color: 0x333333,
             map: this.asteroidTexture,
-            metalness: 0.1,
-            roughness: 0.9,
+            metalness: 0.2,
+            roughness: 0.85,
             side: THREE.DoubleSide,
-            emissive: 0x000000,
-            emissiveIntensity: 0
+            emissive: 0x111111,
+            emissiveIntensity: 0.2
         });
-
+    
         return new THREE.Mesh(geometry, material);
     }
 
@@ -768,6 +849,15 @@ private enemyLaserSound: HTMLAudioElement = new Audio('/assets/laser2.mp3');
         this.enemyShotCounts.set(enemyBody, 0);
         this.enemyHits.set(enemyBody, 0);
         this.enemySpawnsThisLevel++;
+
+            // Initialize burst state with random start delay
+        const initialDelay = this.rng() * this.maxBurstDelay; // Random start time (0 to 2s)
+        this.enemyBurstStates.set(enemyBody, {
+            isBursting: false,
+            burstCount: 0,
+            burstDelay: initialDelay, // Starts with a random delay
+            lastBurstTime: performance.now() / 1000 - initialDelay // Offset for staggered starts
+        });
     }
 
     private async createScene(): Promise<void> {
@@ -849,7 +939,7 @@ private enemyLaserSound: HTMLAudioElement = new Audio('/assets/laser2.mp3');
             this.scene.add(asteroid);
     
             const obstacleBody = new CANNON.Body({ mass: 1 });
-            obstacleBody.addShape(new CANNON.Box(new CANNON.Vec3(40 * scaleFactor, 40 * scaleFactor, 40 * scaleFactor)));
+            obstacleBody.addShape(new CANNON.Sphere(40 * scaleFactor * 0.85)); // Adjusted for more intrusions
             obstacleBody.position.copy(asteroid.position);
             this.world.addBody(obstacleBody);
     
@@ -1462,7 +1552,7 @@ private enemyLaserSound: HTMLAudioElement = new Audio('/assets/laser2.mp3');
                 this.scene.add(asteroid);
     
                 const obstacleBody = new CANNON.Body({ mass: 1 });
-                obstacleBody.addShape(new CANNON.Box(new CANNON.Vec3(40 * scaleFactor, 40 * scaleFactor, 40 * scaleFactor)));
+                obstacleBody.addShape(new CANNON.Sphere(40 * scaleFactor * 0.85));
                 obstacleBody.position.copy(asteroid.position);
                 this.world.addBody(obstacleBody);
     
@@ -1514,42 +1604,68 @@ private enemyLaserSound: HTMLAudioElement = new Audio('/assets/laser2.mp3');
             directionToPod.add(erraticOffset).normalize();
             enemy.body.velocity.set(directionToPod.x * speed, directionToPod.y * speed, directionToPod.z * speed);
     
-            const currentTime = performance.now();
-            const lastShotTime = this.lastEnemyShotTimes.get(enemy.body) || 0;
+            const currentTime = performance.now() / 1000;
+            let burstState = this.enemyBurstStates.get(enemy.body) || {
+                isBursting: false,
+                burstCount: 0,
+                burstDelay: this.minBurstDelay,
+                lastBurstTime: currentTime
+            };
             let shotsFired = this.enemyShotCounts.get(enemy.body) || 0;
-            if (currentTime - lastShotTime > this.enemyFireRate && shotsFired < this.shotsToLoseLife) {
-                // Clone the enemy laser sound to allow overlapping plays
-                const laserClone = this.enemyLaserSound.cloneNode(true) as HTMLAudioElement;
-                laserClone.volume = 0.5; // Adjust volume as needed
-                laserClone.play().catch(err => console.error("Enemy laser sound playback failed:", err));
             
-                const bulletGeometry = new THREE.SphereGeometry(1, 8, 8);
-                const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-                const bulletMesh = new THREE.Mesh(bulletGeometry, bulletMaterial);
-                bulletMesh.position.copy(enemy.mesh.position).add(directionToPod.clone().multiplyScalar(8));
-                this.scene.add(bulletMesh);
-            
-                const bulletBody = new CANNON.Body({ mass: 1 });
-                bulletBody.addShape(new CANNON.Sphere(1));
-                bulletBody.position.copy(bulletMesh.position);
-                bulletBody.velocity.set(directionToPod.x * this.enemyBulletSpeed, directionToPod.y * this.enemyBulletSpeed, directionToPod.z * this.enemyBulletSpeed);
-                this.world.addBody(bulletBody);
-            
-                this.enemyBullets.push({ mesh: bulletMesh, body: bulletBody });
-                this.lastEnemyShotTimes.set(enemy.body, currentTime);
-                shotsFired++;
-                this.enemyShotCounts.set(enemy.body, shotsFired);
-            
-                if (shotsFired >= this.shotsToLoseLife) {
-                    this.scene.remove(enemy.mesh);
-                    this.world.removeBody(enemy.body);
-                    this.lastEnemyShotTimes.delete(enemy.body);
-                    this.enemyHits.delete(enemy.body);
-                    this.enemyShotCounts.delete(enemy.body);
-                    this.enemyShips.splice(i, 1);
-                    continue;
-                }
+
+            // Check if it's time to start or continue a burst
+    if (!burstState.isBursting && currentTime - burstState.lastBurstTime >= burstState.burstDelay && shotsFired < this.shotsToLoseLife) {
+        burstState.isBursting = true;
+        burstState.burstCount = this.rng() < 0.5 ? 1 : 2; // Randomly 1 or 2 shots
+        burstState.lastBurstTime = currentTime;
+    }
+
+    // Handle burst firing
+    if (burstState.isBursting && burstState.burstCount > 0) {
+        const timeSinceLastShot = currentTime - burstState.lastBurstTime;
+        if (timeSinceLastShot >= this.burstInterval || timeSinceLastShot === 0) {
+            // Fire a bullet
+            const laserClone = this.enemyLaserSound.cloneNode(true) as HTMLAudioElement;
+            laserClone.volume = 0.5;
+            laserClone.play().catch(err => console.error("Enemy laser sound playback failed:", err));
+
+            const bulletGeometry = new THREE.SphereGeometry(1, 8, 8);
+            const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+            const bulletMesh = new THREE.Mesh(bulletGeometry, bulletMaterial);
+            bulletMesh.position.copy(enemy.mesh.position).add(directionToPod.clone().multiplyScalar(8));
+            this.scene.add(bulletMesh);
+
+            const bulletBody = new CANNON.Body({ mass: 1 });
+            bulletBody.addShape(new CANNON.Sphere(1));
+            bulletBody.position.copy(bulletMesh.position);
+            bulletBody.velocity.set(directionToPod.x * this.enemyBulletSpeed, directionToPod.y * this.enemyBulletSpeed, directionToPod.z * this.enemyBulletSpeed);
+            this.world.addBody(bulletBody);
+
+            this.enemyBullets.push({ mesh: bulletMesh, body: bulletBody });
+            burstState.burstCount--;
+            burstState.lastBurstTime = currentTime;
+            shotsFired++;
+            this.enemyShotCounts.set(enemy.body, shotsFired);
+
+            // Set damage cooldown after first shot in burst
+            if (!this.enemyDamageCooldowns.has(enemy.body)) {
+                this.enemyDamageCooldowns.set(enemy.body, currentTime + this.burstInterval * 2); // Cooldown lasts beyond burst
             }
+        }
+
+        // End burst and set random delay for next
+        if (burstState.burstCount === 0) {
+            burstState.isBursting = false;
+            burstState.burstDelay = this.minBurstDelay + this.rng() * (this.maxBurstDelay - this.minBurstDelay);
+        }
+    }
+
+    this.enemyBurstStates.set(enemy.body, burstState);
+
+
+
+            
     
             for (let j = this.bullets.length - 1; j >= 0; j--) {
                 const bullet = this.bullets[j];
@@ -1695,20 +1811,20 @@ private enemyLaserSound: HTMLAudioElement = new Audio('/assets/laser2.mp3');
         const fragmentCount = Math.floor(3 + this.rng() * 2);
         for (let i = 0; i < fragmentCount; i++) {
             const fragment = this.generateAsteroid(newScale);
-            fragment.scale.set(newScale, newScale, newScale);
+            fragment.scale.set(1, 1, 1); // Scale applied in generateAsteroid
             fragment.position.copy(mesh.position);
             this.scene.add(fragment);
-
+    
             const fragmentBody = new CANNON.Body({ mass: 1 });
-            fragmentBody.addShape(new CANNON.Box(new CANNON.Vec3(40 * newScale, 40 * newScale, 40 * newScale)));
+            fragmentBody.addShape(new CANNON.Sphere(40 * newScale * 0.85)); // Adjusted radius
             fragmentBody.position.copy(mesh.position);
             const scatterVel = new THREE.Vector3((this.rng() - 0.5) * 20, (this.rng() - 0.5) * 20, (this.rng() - 0.5) * 20);
             fragmentBody.velocity.set(scatterVel.x, scatterVel.y, scatterVel.z);
             this.world.addBody(fragmentBody);
-
+    
             this.obstacles.push({ mesh: fragment, body: fragmentBody, isFullAsteroid: false });
         }
-
+    
         if (body.userData?.debugMesh) {
             this.scene.remove(body.userData.debugMesh);
         }
