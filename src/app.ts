@@ -148,7 +148,7 @@ private enemyDamageCooldowns: Map<CANNON.Body, number> = new Map(); // Tracks wh
 private burstInterval: number = 0.2; // Time between shots in a burst (e.g., 200ms)
 private minBurstDelay: number = 0.5; // Min delay between bursts
 private maxBurstDelay: number = 2.0; // Max delay between bursts
-
+private startPrompt!: HTMLElement;
 
     constructor() {
         this.initialize().then(() => {
@@ -188,24 +188,37 @@ private maxBurstDelay: number = 2.0; // Max delay between bursts
     this.isEngineSoundStarted = false; 
 
     
-        this.songs = [
-            new Audio('/assets/music1.mp3'),
-            new Audio('/assets/music2.mp3'),
-            new Audio('/assets/music3.mp3')
-        ];
-        this.audioContext = new AudioContext();
-        this.backgroundMusicGain = this.audioContext.createGain();
-        this.backgroundMusicGain.gain.setValueAtTime(this.backgroundMusicVolume, this.audioContext.currentTime); // Use private variable
-        this.backgroundMusicGain.connect(this.audioContext.destination);
+   // Song randomization
+   this.songs = [
+    new Audio('/assets/music1.mp3'),
+    new Audio('/assets/music2.mp3'),
+    new Audio('/assets/music3.mp3')
+];
+this.backgroundMusicGain = this.audioContext.createGain();
+this.backgroundMusicGain.gain.setValueAtTime(this.backgroundMusicVolume, this.audioContext.currentTime);
+this.backgroundMusicGain.connect(this.audioContext.destination);
+
+// Helper function to play a random song
+const playRandomSong = () => {
+    let newIndex;
+    do {
+        newIndex = Math.floor(Math.random() * this.songs.length);
+    } while (newIndex === this.currentSongIndex && this.songs.length > 1); // Avoid repeat unless only one song
+    this.currentSongIndex = newIndex;
+    this.songs[this.currentSongIndex].play().catch(err => console.error("Song playback failed:", err));
+};
+
+this.songs.forEach((song) => {
+    const source = this.audioContext.createMediaElementSource(song);
+    source.connect(this.backgroundMusicGain);
+    song.addEventListener('ended', () => {
+        playRandomSong(); // Play a random song when the current one ends
+    });
+});
+
+// Start with a random song
+this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
     
-        this.songs.forEach((song, index) => {
-            const source = this.audioContext.createMediaElementSource(song);
-            source.connect(this.backgroundMusicGain);
-            song.addEventListener('ended', () => {
-                this.currentSongIndex = (this.currentSongIndex + 1) % this.songs.length;
-                this.songs[this.currentSongIndex].play().catch(err => console.error("Song playback failed:", err));
-            });
-        });
     
         this.explosionSound = new Audio('/assets/explosion.mp3');
         this.niceShotSound = new Audio('/assets/audio/nice_shot.mp3');
@@ -223,9 +236,9 @@ private maxBurstDelay: number = 2.0; // Max delay between bursts
         this.crosshair.style.display = "none";
         this.startButton.style.display = "none";
         this.difficultyMenu.style.display = "block";
+        this.startPrompt.style.display = "none"; // Hide initially
         const controlsElement = document.getElementById("controls") as HTMLElement;
-        controlsElement.style.display = this.showDebugControls ? "block" : "none"; // Off by default
-    
+        controlsElement.style.display = this.showDebugControls ? "block" : "none";
         const textureLoader = new THREE.TextureLoader();
         this.asteroidTexture = await textureLoader.loadAsync('/assets/asteroid.jpg').catch(() => null);
         this.metalTexture = await textureLoader.loadAsync('/assets/metal.png').catch(() => null);
@@ -233,10 +246,8 @@ private maxBurstDelay: number = 2.0; // Max delay between bursts
 
     private assignDomElements(): void {
         this.livesCounter = document.getElementById("healthCounter") as HTMLElement;
-        this.scoreCounter = document.getElementById("scoreCounter") as HTMLElement || document.createElement("div");
-        this.scoreCounter.id = "scoreCounter";
-        this.enemiesKilledCounter = document.getElementById("enemiesKilledCounter") as HTMLElement || document.createElement("div");
-        this.enemiesKilledCounter.id = "enemiesKilledCounter";
+        this.scoreCounter = document.getElementById("scoreCounter") as HTMLElement;
+        this.enemiesKilledCounter = document.getElementById("enemiesKilledCounter") as HTMLElement;
         this.countdownElement = document.getElementById("countdown") as HTMLElement;
         this.hud = document.getElementById("hud") as HTMLElement;
         this.pauseMenu = document.getElementById("pauseMenu") as HTMLElement;
@@ -246,23 +257,9 @@ private maxBurstDelay: number = 2.0; // Max delay between bursts
         this.crosshair = document.getElementById("crosshair") as HTMLElement;
         this.startButton = document.getElementById("startButton") as HTMLElement;
         this.difficultyMenu = document.getElementById("difficultyMenu") as HTMLElement;
-        this.hud.appendChild(this.scoreCounter);
-        this.hud.appendChild(this.enemiesKilledCounter);
-        this.hud.style.display = "flex";
-        this.hud.style.flexDirection = "column"; // Stack vertically on left
-        this.hud.style.justifyContent = "flex-start";
-        this.hud.style.alignItems = "flex-start";
-        this.hud.style.position = "absolute";
-        this.hud.style.top = "10px";
-        this.hud.style.left = "10px"; // Left side
-        this.hud.style.width = "auto";
-        this.countdownElement.style.position = "absolute";
-        this.countdownElement.style.top = "50%";
-        this.countdownElement.style.left = "50%";
-        this.countdownElement.style.transform = "translate(-50%, -50%)";
-        this.countdownElement.style.fontSize = "48px";
-        this.countdownElement.style.color = "white";
-        this.updateHUD();
+        this.startPrompt = document.getElementById("startPrompt") as HTMLElement; // Add this
+        // No need to append or set styles—Tailwind handles it
+        this.updateHUD(); // Safe to call with the guard in place
     }
 
     private setupDifficultyButtons(): void {
@@ -312,6 +309,8 @@ private maxBurstDelay: number = 2.0; // Max delay between bursts
                 this.isEngineSoundStarted = true;
             }
         });
+        this.introAudio.play().catch(err => console.error("Audio playback failed:", err));
+        this.songs[this.currentSongIndex].play().catch(err => console.error("Song playback failed:", err));
         window.addEventListener('resize', () => this.handleResize());
     }
 
@@ -428,12 +427,14 @@ private maxBurstDelay: number = 2.0; // Max delay between bursts
         });
     
         this.canvas.addEventListener("click", () => {
-            if (!this.isPaused && document.pointerLockElement !== this.canvas && !this.isIntroPlaying && !this.raceStarted) {
-                this.canvas.requestPointerLock();
+            if (!this.isPaused && !this.isIntroPlaying && !this.raceStarted && this.startPrompt.style.display === "block") {
+                this.startPrompt.style.display = "none";
+                this.raceStarted = true;
+                this.canvas.requestPointerLock(); // Lock pointer on click
             }
             if (this.audioContext.state === 'suspended') {
-        this.audioContext.resume();
-    }
+                this.audioContext.resume();
+            }
         });
     
         this.resumeButton.addEventListener("click", () => {
@@ -1256,19 +1257,20 @@ private maxBurstDelay: number = 2.0; // Max delay between bursts
     
         if (this.isIntroPlaying) {
             this.introTime += deltaTime;
-            const angle = (this.introTime / (this.introDuration * 5)) * 2 * Math.PI;
+            const startAngle = Math.PI; // 180 degrees
+            const angle = startAngle + (this.introTime / this.introDuration) * (2 * Math.PI / 3); // 3x slower: 120° over 20s
             const radius = 20;
             const podPos = this.pod.position;
-    
+        
             this.camera.position.set(
                 podPos.x + radius * Math.cos(angle),
                 podPos.y + 5,
                 podPos.z + radius * Math.sin(angle)
             );
             this.camera.lookAt(podPos);
-    
+        
             this.renderer.render(this.scene, this.camera);
-    
+        
             if (this.introTime >= this.introDuration || this.introAudio.ended) {
                 this.isIntroPlaying = false;
                 this.introTime = 0;
@@ -1296,9 +1298,8 @@ private maxBurstDelay: number = 2.0; // Max delay between bursts
             this.renderer.render(this.scene, this.camera);
     
             if (timeLeft <= 0) {
-                this.raceStarted = true;
                 this.countdownElement.style.display = "none";
-                this.canvas.requestPointerLock();
+                this.startPrompt.style.display = "block"; // Show "Click to Start" instead of locking pointer
             }
             return;
         }
@@ -1801,8 +1802,36 @@ private maxBurstDelay: number = 2.0; // Max delay between bursts
     }
 
     private updateHUD(): void {
-        this.livesCounter.textContent = `Lives: ${this.lives}`;
-        this.scoreCounter.textContent = `Score: ${Math.floor(this.score)}`;
+        const healthCounter = document.getElementById("healthCounter") as HTMLElement;
+        const scoreCounter = document.getElementById("scoreCounter") as HTMLElement;
+        const enemiesKilledCounter = document.getElementById("enemiesKilledCounter") as HTMLElement;
+        const progressBar = document.getElementById("progressBar") as HTMLElement;
+    
+        const healthValue = healthCounter.querySelector(".value") as HTMLElement;
+        const healthBar = healthCounter.querySelector(".bar") as HTMLElement;
+        const scoreValue = scoreCounter.querySelector(".value") as HTMLElement;
+        const enemiesKilledValue = enemiesKilledCounter.querySelector(".value") as HTMLElement;
+        const progressBarElement = progressBar.querySelector(".progress-bar") as HTMLElement;
+        const progressValue = progressBar.querySelector(".value") as HTMLElement;
+    
+        healthValue.textContent = `${this.lives}`;
+        const shieldPercent = (this.lives / (this.difficulty === 'easy' ? 15 : this.difficulty === 'normal' ? 10 : 5)) * 100;
+        healthBar.style.setProperty('--bar-width', `${shieldPercent}%`);
+        healthBar.style.background = shieldPercent > 50 ? '#00ff00' : shieldPercent > 25 ? '#ffff00' : '#ff0000';
+    
+        scoreValue.textContent = `${Math.floor(this.score)}`;
+        enemiesKilledValue.textContent = `${this.enemiesKilled}`;
+    
+        // Guard against undefined trackPath
+        if (this.trackPath) {
+            const progress = (this.podDistance / this.trackPath.getLength()) * 100;
+            progressValue.textContent = `${Math.floor(progress)}%`;
+            progressBarElement.style.setProperty('--bar-width', `${progress}%`);
+        } else {
+            // Default state when trackPath isn’t ready
+            progressValue.textContent = "0%";
+            progressBarElement.style.setProperty('--bar-width', "0%");
+        }
     }
 
     private splitAsteroid(mesh: THREE.Mesh, body: CANNON.Body, scaleFactor: number): void {
