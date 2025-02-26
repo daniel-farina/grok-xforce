@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pod Racing Game - Wipeout Style</title>
+    <style>
+        body, html { 
+            margin: 0; 
+            padding: 0; 
+            overflow: hidden; 
+            width: 100%; 
+            height: 100%; 
+            background: #1a2a44; 
+        }
+        canvas { 
+            width: 100% !important; 
+            height: 100% !important; 
+            display: block; 
+            cursor: none; 
+        }
+        #hud { 
+            position: absolute; 
+            top: 10px; 
+            left: 0; 
+            width: 100%; 
+            display: flex; 
+            justify-content: center; 
+            gap: 20px; 
+            color: #00ffff; 
+            font-family: 'Arial', sans-serif; 
+            font-size: 16px; 
+            z-index: 10; 
+            text-shadow: 0 0 5px #00ffff; 
+        }
+        #healthCounter, #scoreCounter { 
+            background: rgba(0, 0, 0, 0.7); 
+            padding: 5px 10px; 
+            border-radius: 3px; 
+            border: 1px solid #00ffff; 
+        }
+        #progressBar { 
+            position: absolute; 
+            top: 10px; 
+            right: 10px; 
+            width: 100px; 
+            height: 10px; 
+            background: rgba(0, 0, 0, 0.7); 
+            border: 1px solid #00ffff; 
+            border-radius: 2px; 
+            overflow: hidden; 
+            display: flex; 
+            align-items: center; 
+            justify-content: flex-start; 
+            z-index: 10; 
+        }
+        #progressBar::before { 
+            content: ''; 
+            position: absolute; 
+            width: var(--progress-width, 0%); 
+            height: 100%; 
+            background: #00ff00; 
+            transition: width 0.1s linear; 
+        }
+        #progressBar span { 
+            position: relative; 
+            font-size: 12px; 
+            font-family: 'Arial', sans-serif; 
+            color: #ffffff; 
+            text-shadow: 0 0 2px #000000; 
+            padding-left: 5px; 
+            z-index: 1; 
+            font-weight: bold; 
+        }
+        #countdown { 
+            position: absolute; 
+            top: 50%; 
+            left: 50%; 
+            transform: translate(-50%, -50%); 
+            font-size: 48px; 
+            color: #00ffff; 
+            text-shadow: 0 0 10px #00ffff; 
+            z-index: 10; 
+        }
+        #pauseMenu { 
+            position: fixed; 
+            bottom: 20px; 
+            right: 20px; 
+            background: rgba(0, 0, 0, 0.9); 
+            padding: 20px 30px; 
+            color: #00ffff; 
+            text-align: center; 
+            border-radius: 10px; 
+            border: 2px solid #00ffff; 
+            z-index: 20; 
+            text-shadow: 0 0 5px #00ffff; 
+            display: none; 
+        }
+        #difficultyMenu { 
+            position: fixed; 
+            top: 50%; 
+            left: 50%; 
+            transform: translate(-50%, -50%); 
+            background: rgba(0, 0, 0, 0.9); 
+            padding: 20px 30px; 
+            color: #00ffff; 
+            text-align: center; 
+            border-radius: 10px; 
+            border: 2px solid #00ffff; 
+            z-index: 20; 
+            text-shadow: 0 0 5px #00ffff; 
+        }
+        #pauseMenu button, #difficultyMenu button { 
+            margin: 10px; 
+            padding: 12px 24px; 
+            font-size: 18px; 
+            background: #00ffff; 
+            color: black; 
+            border: none; 
+            border-radius: 5px; 
+            cursor: pointer; 
+            box-shadow: 0 0 5px #00ffff; 
+        }
+        #pauseMenu button:hover, #difficultyMenu button:hover { 
+            background: #00cccc; 
+        }
+        #crosshair { 
+            position: fixed; 
+            top: 50%; 
+            left: 50%; 
+            transform: translate(-50%, -50%); 
+            width: 20px; 
+            height: 20px; 
+            background: transparent; 
+            border: 2px solid #ff0000; 
+            border-radius: 50%; 
+            pointer-events: none; 
+            z-index: 15; 
+            display: none; 
+        }
+        #crosshair::before { 
+            content: ''; 
+            position: absolute; 
+            top: 50%; 
+            left: 50%; 
+            width: 10px; 
+            height: 2px; 
+            background: #ff0000; 
+            transform: translate(-50%, -50%); 
+        }
+        #crosshair::after { 
+            content: ''; 
+            position: absolute; 
+            top: 50%; 
+            left: 50%; 
+            width: 2px; 
+            height: 10px; 
+            background: #ff0000; 
+            transform: translate(-50%, -50%); 
+        }
+        #startButton { 
+            position: absolute; 
+            top: 50%; 
+            left: 50%; 
+            transform: translate(-50%, -50%); 
+            padding: 15px 30px; 
+            font-size: 24px; 
+            background: #00ffff; 
+            color: black; 
+            border: none; 
+            border-radius: 5px; 
+            cursor: pointer; 
+            box-shadow: 0 0 10px #00ffff; 
+            z-index: 20; 
+            display: none; 
+        }
+        #startButton:hover { 
+            background: #00cccc; 
+        }
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            border: 1px solid #00ffff;
+            color: #00ffff;
+            font-family: 'Arial', sans-serif;
+            font-size: 14px;
+            z-index: 10;
+            text-shadow: 0 0 5px #00ffff;
+        }
+        #controls .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        #controls .tab {
+            padding: 5px 10px;
+            background: rgba(0, 255, 255, 0.2);
+            cursor: pointer;
+            border-radius: 3px;
+        }
+        #controls .tab.active {
+            background: #00ffff;
+            color: black;
+        }
+        #controls .tab-content {
+            display: none;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        #controls .tab-content.active {
+            display: flex;
+        }
+        #controls label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        #controls input[type="range"] {
+            width: 100px;
+            accent-color: #00ffff;
+        }
+        #controls select {
+            width: 100px;
+            background: rgba(0, 255, 255, 0.2);
+            color: #00ffff;
+            border: 1px solid #00ffff;
+            border-radius: 3px;
+            padding: 2px;
+        }
+        #controls span {
+            min-width: 50px;
+            text-align: right;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="renderCanvas"></canvas>
+    <div id="hud">
+        <div id="healthCounter">Lives: 10</div>
+        <div id="scoreCounter">Score: 0</div>
+        <div id="enemiesKilledCounter">Enemies Killed: 0</div>
+        <div id="progressBar"><span>0%</span></div>
+    </div>
+    <div id="countdown"></div>
+    <div id="pauseMenu">
+        <h2>Paused</h2>
+        <button id="resumeButton">Resume</button>
+    </div>
+    <div id="gameOverMenu" style="display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0, 0, 0, 0.9); padding: 20px 30px; color: #00ffff; text-align: center; border-radius: 10px; border: 2px solid #00ffff; z-index: 20; text-shadow: 0 0 5px #00ffff;">
+        <h2>Game Over!</h2>
+        <p>Press 'R' or click below to restart.</p>
+        <button id="restartButton">Restart Game</button>
+    </div>
+    <div id="crosshair"></div>
+    <button id="startButton">Start Game</button>
+    <div id="difficultyMenu">
+        <h2>Select Difficulty</h2>
+        <button id="easyButton">Easy</button>
+        <button id="normalButton">Normal</button>
+        <button id="hardButton">Hard</button>
+    </div>
+    <div id="controls">
+        <div class="tabs">
+            <div id="podTab" class="tab active">Spaceship Settings</div>
+            <div id="enemyTab" class="tab">Enemy Settings</div>
+            <div id="engineTab" class="tab">Engine Sound</div>
+        </div>
+        <div id="podControls" class="tab-content active">
+            <label>Scale: <input type="range" id="spaceshipScale" min="0.1" max="5" value="3.4" step="0.1"><span id="spaceshipScaleValue">3.4</span></label>
+            <label>Ship Pos X: <input type="range" id="spaceshipPosX" min="-50" max="50" value="14" step="1"><span id="spaceshipPosXValue">14</span></label>
+            <label>Ship Pos Y: <input type="range" id="spaceshipPosY" min="-50" max="50" value="-3" step="1"><span id="spaceshipPosYValue">-3</span></label>
+            <label>Ship Pos Z: <input type="range" id="spaceshipPosZ" min="-50" max="50" value="15" step="1"><span id="spaceshipPosZValue">15</span></label>
+            <label>Ship Rot X: <input type="range" id="spaceshipRotX" min="-180" max="180" value="0" step="10"><span id="spaceshipRotXValue">0</span></label>
+            <label>Ship Rot Y: <input type="range" id="spaceshipRotY" min="-180" max="180" value="0" step="10"><span id="spaceshipRotYValue">0</span></label>
+            <label>Ship Rot Z: <input type="range" id="spaceshipRotZ" min="-180" max="180" value="0" step="10"><span id="spaceshipRotZValue">0</span></label>
+            <label>Ship Axis X: <input type="range" id="spaceshipAxisX" min="-1" max="1" value="0" step="0.1"><span id="spaceshipAxisXValue">0.0</span></label>
+            <label>Ship Axis Y: <input type="range" id="spaceshipAxisY" min="-1" max="1" value="0" step="0.1"><span id="spaceshipAxisYValue">0.0</span></label>
+            <label>Ship Axis Z: <input type="range" id="spaceshipAxisZ" min="-1" max="1" value="-1" step="0.1"><span id="spaceshipAxisZValue">-1.0</span></label>
+        </div>
+        <div id="enemyControls" class="tab-content">
+            <label>Spawn Distance: <input type="range" id="spawnDistance" min="500" max="5000" value="900" step="100"><span id="spawnDistanceValue">900</span></label>
+            <label>Lateral Offset: <input type="range" id="lateralOffset" min="50" max="1000" value="200" step="50"><span id="lateralOffsetValue">200</span></label>
+            <label>Base Speed: <input type="range" id="baseSpeed" min="10" max="100" value="25" step="5"><span id="baseSpeedValue">25</span></label>
+            <label>Fire Rate (ms): <input type="range" id="fireRate" min="500" max="2000" value="1000" step="100"><span id="fireRateValue">1000</span></label>
+            <label>Bullet Speed: <input type="range" id="bulletSpeed" min="100" max="1000" value="500" step="50"><span id="bulletSpeedValue">500</span></label>
+        </div>
+        <div id="engineControls" class="tab-content">
+            <label>Volume: <input type="range" id="engineVolume" min="0" max="0.5" value="0.01" step="0.01"><span id="engineVolumeValue">0.01</span></label>
+            <label>Base Freq: <input type="range" id="engineFrequency" min="20" max="1000" value="100" step="10"><span id="engineFrequencyValue">100</span></label>
+            <label>Detune: <input type="range" id="engineDetune" min="-1200" max="1200" value="0" step="100"><span id="engineDetuneValue">0</span></label>
+            <label>Yaw Mod: <input type="range" id="engineYawMod" min="0" max="200" value="50" step="10"><span id="engineYawModValue">50</span></label>
+            <label>Filter Freq: <input type="range" id="engineFilterFreq" min="100" max="5000" value="2000" step="100"><span id="engineFilterFreqValue">2000</span></label>
+            <label>Type: <select id="engineType">
+                <option value="sawtooth" selected>Sawtooth</option>
+                <option value="sine">Sine</option>
+                <option value="square">Square</option>
+                <option value="triangle">Triangle</option>
+            </select></label>
+        </div>
+        
+    </div>
+    <script type="module" src="/dist/app.js"></script>
+</body>
+</html>
