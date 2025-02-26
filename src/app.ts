@@ -26,8 +26,8 @@ class PodRacingGame {
     private renderer!: THREE.WebGLRenderer;
     private world: CANNON.World = new CANNON.World();
     private canvas!: HTMLCanvasElement;
-    private pod!: THREE.Mesh; // Red box pod (original)
-    private spaceship!: THREE.Group; // New GLTF spaceship model
+    private pod!: THREE.Mesh; // Red box pod (camera/gun, moves with mouse)
+    private spaceship!: THREE.Group; // Spaceship model (fixed offset, follows path)
     private podBody!: CANNON.Body;
     private obstacles: { mesh: THREE.Group | THREE.Mesh; body: CANNON.Body; velocity?: CANNON.Vec3; isFullAsteroid: boolean }[] = [];
     private speedBoosts: { mesh: THREE.Mesh; body: CANNON.Body }[] = [];
@@ -113,17 +113,19 @@ class PodRacingGame {
     private enemyHits: Map<CANNON.Body, number> = new Map();
     private shotsToLoseLife: number = 10;
     private difficulty: 'easy' | 'normal' | 'hard' = 'normal';
-    private spaceshipScale: number = 1;
-    private spaceshipPositionX: number = 4; // Initial X position
-    private spaceshipPositionY: number = 0; // Initial Y position
-    private spaceshipPositionZ: number = 7; // Initial Z position
+    private spaceshipScale: number = 3.4;
+    private spaceshipPositionX: number = 14; // Fixed X offset
+    private spaceshipPositionY: number = -3; // Fixed Y offset
+    private spaceshipPositionZ: number = 15; // Fixed Z offset
     private spaceshipRotationX: number = 0;
     private spaceshipRotationY: number = 0;
     private spaceshipRotationZ: number = 0;
     private spaceshipRotationAxisX: number = 0;
     private spaceshipRotationAxisY: number = 0;
-    private spaceshipRotationAxisZ: number = -1; // Default aligns with pod
-
+    private spaceshipRotationAxisZ: number = -1;
+    private neonSquare!: THREE.LineLoop; 
+    private showNeonSquare: boolean = true; // Toggle for neon square visibility
+    private showDebugControls: boolean = true; 
     constructor() {
         this.initialize().then(() => {
             console.log("Game initialized");
@@ -167,6 +169,9 @@ class PodRacingGame {
         this.crosshair.style.display = "none";
         this.startButton.style.display = "none";
         this.difficultyMenu.style.display = "block";
+        const controlsElement = document.getElementById("controls") as HTMLElement;
+        controlsElement.style.display = this.showDebugControls ? "block" : "none"; // Set initial visibility
+    
 
         const textureLoader = new THREE.TextureLoader();
         this.asteroidTexture = await new Promise<THREE.Texture>((resolve, reject) => {
@@ -306,6 +311,14 @@ class PodRacingGame {
                         this.canvas.requestPointerLock();
                     }
                     break;
+                case 78: // 'N' key to toggle neon square
+                    this.showNeonSquare = !this.showNeonSquare;
+                    break;
+                case 72: // 'H' key to toggle debug controls
+                    this.showDebugControls = !this.showDebugControls;
+                    const controlsElement = document.getElementById("controls") as HTMLElement;
+                    controlsElement.style.display = this.showDebugControls ? "block" : "none";
+                    break;
             }
         });
 
@@ -409,55 +422,52 @@ class PodRacingGame {
 
         posXSlider.addEventListener("input", () => {
             this.spaceshipPositionX = parseFloat(posXSlider.value);
-            this.updateSpaceshipPositionAndRotation();
+            this.updateSpaceshipPosition();
             posXValue.textContent = this.spaceshipPositionX.toFixed(2);
         });
 
         posYSlider.addEventListener("input", () => {
             this.spaceshipPositionY = parseFloat(posYSlider.value);
-            this.updateSpaceshipPositionAndRotation();
+            this.updateSpaceshipPosition();
             posYValue.textContent = this.spaceshipPositionY.toFixed(2);
         });
 
         posZSlider.addEventListener("input", () => {
             this.spaceshipPositionZ = parseFloat(posZSlider.value);
-            this.updateSpaceshipPositionAndRotation();
+            this.updateSpaceshipPosition();
             posZValue.textContent = this.spaceshipPositionZ.toFixed(2);
         });
 
         rotXSlider.addEventListener("input", () => {
             this.spaceshipRotationX = parseFloat(rotXSlider.value) * Math.PI / 180;
-            this.updateSpaceshipPositionAndRotation();
+            this.spaceship.rotation.x = this.spaceshipRotationX;
             rotXValue.textContent = rotXSlider.value;
         });
 
         rotYSlider.addEventListener("input", () => {
             this.spaceshipRotationY = parseFloat(rotYSlider.value) * Math.PI / 180;
-            this.updateSpaceshipPositionAndRotation();
+            this.spaceship.rotation.y = this.spaceshipRotationY;
             rotYValue.textContent = rotYSlider.value;
         });
 
         rotZSlider.addEventListener("input", () => {
             this.spaceshipRotationZ = parseFloat(rotZSlider.value) * Math.PI / 180;
-            this.updateSpaceshipPositionAndRotation();
+            this.spaceship.rotation.z = this.spaceshipRotationZ;
             rotZValue.textContent = rotZSlider.value;
         });
 
         axisXSlider.addEventListener("input", () => {
             this.spaceshipRotationAxisX = parseFloat(axisXSlider.value);
-            this.updateSpaceshipPositionAndRotation();
             axisXValue.textContent = this.spaceshipRotationAxisX.toFixed(2);
         });
 
         axisYSlider.addEventListener("input", () => {
             this.spaceshipRotationAxisY = parseFloat(axisYSlider.value);
-            this.updateSpaceshipPositionAndRotation();
             axisYValue.textContent = this.spaceshipRotationAxisY.toFixed(2);
         });
 
         axisZSlider.addEventListener("input", () => {
             this.spaceshipRotationAxisZ = parseFloat(axisZSlider.value);
-            this.updateSpaceshipPositionAndRotation();
             axisZValue.textContent = this.spaceshipRotationAxisZ.toFixed(2);
         });
 
@@ -500,21 +510,15 @@ class PodRacingGame {
         });
     }
 
-    private updateSpaceshipPositionAndRotation(): void {
+    private updateSpaceshipPosition(): void {
         if (this.spaceship && this.pod) {
-            // Base position and rotation from the pod
-            this.spaceship.position.copy(this.pod.position);
+            // Position the spaceship relative to the camera's local coordinate system
+            const offset = new THREE.Vector3(this.spaceshipPositionX, this.spaceshipPositionY, this.spaceshipPositionZ); // X=4, Y=0, Z=7
+            offset.applyQuaternion(this.pod.quaternion); // Apply pod's rotation (camera's orientation)
+            this.spaceship.position.copy(this.pod.position).add(offset);
+            
+            // Match the spaceship's rotation to the pod's (camera's) rotation
             this.spaceship.quaternion.copy(this.pod.quaternion);
-
-            // Apply offset position
-            const offset = new THREE.Vector3(this.spaceshipPositionX, this.spaceshipPositionY, this.spaceshipPositionZ);
-            offset.applyQuaternion(this.pod.quaternion); // Rotate offset by pod's orientation
-            this.spaceship.position.add(offset);
-
-            // Apply additional rotation offset
-            const additionalRotation = new THREE.Euler(this.spaceshipRotationX, this.spaceshipRotationY, this.spaceshipRotationZ, 'XYZ');
-            const additionalQuat = new THREE.Quaternion().setFromEuler(additionalRotation);
-            this.spaceship.quaternion.multiply(additionalQuat);
         }
     }
 
@@ -637,43 +641,58 @@ class PodRacingGame {
     private async createScene(): Promise<void> {
         this.rng = seedrandom("pod_racing_seed");
 
-        // Create original red box pod
-    const podGeometry = new THREE.BoxGeometry(4, 4, 4);
-    const podMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000, metalness: 0.8, roughness: 0.2, emissive: 0x550000, emissiveIntensity: 1.5 });
-    this.pod = new THREE.Mesh(podGeometry, podMaterial);
-    this.pod.position.set(1500, 0, 0);
-    this.scene.add(this.pod);
+// Create blue neon square for shooting limit (static field of view)
+const squareSize = 2; // Size of the square
+const squareGeometry = new THREE.BufferGeometry();
+const squareVertices = new Float32Array([
+    -squareSize, -squareSize, -3, // Bottom-left
+    squareSize, -squareSize, -3,  // Bottom-right
+    squareSize, squareSize, -3,   // Top-right
+    -squareSize, squareSize, -3   // Top-left
+]);
+squareGeometry.setAttribute('position', new THREE.BufferAttribute(squareVertices, 3));
+const squareMaterial = new THREE.LineBasicMaterial({ color: 0x00ffff, emissive: 0x00ffff, emissiveIntensity: 2, linewidth: 2 });
+this.neonSquare = new THREE.LineLoop(squareGeometry, squareMaterial);
+this.neonSquare.visible = false; // Hidden by default, shown in first-person mode
+this.scene.add(this.neonSquare);
 
-    // Load spaceship model
-    const loader = new GLTFLoader();
-    this.spaceship = await new Promise<THREE.Group>((resolve, reject) => {
-        loader.load(
-            '/assets/spaceship/scene.gltf',
-            (gltf) => resolve(gltf.scene),
-            undefined,
-            (error) => reject(error)
+        // Create original red box pod (camera/gun)
+        const podGeometry = new THREE.BoxGeometry(4, 4, 4);
+        const podMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000, metalness: 0.8, roughness: 0.2, emissive: 0x550000, emissiveIntensity: 1.5 });
+        this.pod = new THREE.Mesh(podGeometry, podMaterial);
+        this.pod.position.set(1500, 0, 0);
+        this.scene.add(this.pod);
+
+        // Load spaceship model
+        const loader = new GLTFLoader();
+        this.spaceship = await new Promise<THREE.Group>((resolve, reject) => {
+            loader.load(
+                '/assets/spaceship/scene.gltf',
+                (gltf) => resolve(gltf.scene),
+                undefined,
+                (error) => reject(error)
+            );
+        }).catch((error) => {
+            console.error('Failed to load spaceship model:', error);
+            const fallbackGeometry = new THREE.BoxGeometry(4, 4, 4);
+            const fallbackMaterial = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+            return new THREE.Group().add(new THREE.Mesh(fallbackGeometry, fallbackMaterial));
+        });
+
+        // Set spaceship initial position with fixed offset
+        this.spaceship.position.set(
+            this.pod.position.x + this.spaceshipPositionX,
+            this.pod.position.y + this.spaceshipPositionY,
+            this.pod.position.z + this.spaceshipPositionZ
         );
-    }).catch((error) => {
-        console.error('Failed to load spaceship model:', error);
-        const fallbackGeometry = new THREE.BoxGeometry(4, 4, 4);
-        const fallbackMaterial = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
-        return new THREE.Group().add(new THREE.Mesh(fallbackGeometry, fallbackMaterial));
-    });
+        this.spaceship.scale.set(this.spaceshipScale, this.spaceshipScale, this.spaceshipScale);
+        this.spaceship.rotation.set(this.spaceshipRotationX, this.spaceshipRotationY, this.spaceshipRotationZ);
+        this.scene.add(this.spaceship);
 
-    // Set initial spaceship position relative to pod
-    this.spaceship.position.set(
-        this.pod.position.x + this.spaceshipPositionX,
-        this.pod.position.y + this.spaceshipPositionY,
-        this.pod.position.z + this.spaceshipPositionZ
-    );
-    this.spaceship.scale.set(this.spaceshipScale, this.spaceshipScale, this.spaceshipScale);
-    this.spaceship.rotation.set(this.spaceshipRotationX, this.spaceshipRotationY, this.spaceshipRotationZ);
-    this.scene.add(this.spaceship);
-
-    this.podBody = new CANNON.Body({ mass: 1 });
-    this.podBody.addShape(new CANNON.Box(new CANNON.Vec3(2, 2, 2)));
-    this.podBody.position.copy(this.pod.position);
-    this.world.addBody(this.podBody);
+        this.podBody = new CANNON.Body({ mass: 1 });
+        this.podBody.addShape(new CANNON.Box(new CANNON.Vec3(2, 2, 2)));
+        this.podBody.position.copy(this.pod.position);
+        this.world.addBody(this.podBody);
 
         const points = [
             new THREE.Vector3(1500, 0, 0),
@@ -973,17 +992,27 @@ class PodRacingGame {
 
     private animate(): void {
         requestAnimationFrame(() => this.animate());
+        
+       // Update spaceship position and orientation (fixed relative to camera)
+    this.updateSpaceshipPosition();
 
-        this.updateSpaceshipPositionAndRotation();
+    // Update neon square position and orientation (fixed relative to path)
+    const tangentSpaship = this.trackPath.getTangentAt(this.podDistance / this.trackPath.getLength());
+    if (this.cameraMode === 0) {
+        this.neonSquare.visible = true;
+        this.neonSquare.position.copy(this.pod.position).addScaledVector(tangentSpaship, -3);
+        const tangentNeon = this.trackPath.getTangentAt(this.podDistance / this.trackPath.getLength());
+        const quaternionNeon = new THREE.Quaternion();
+        quaternionNeon.setFromUnitVectors(new THREE.Vector3(0, 0, -1), tangentNeon);
+        this.neonSquare.quaternion.copy(quaternionNeon);
+    } else {
+        this.neonSquare.visible = false;
+    }
 
         if (this.isPaused) {
-            // Render the scene even when paused so changes are visible
             this.renderer.render(this.scene, this.camera);
             return;
         }
-    
-        if (this.isPaused) return;
-
         this.world.step(1 / 60);
         const deltaTime = 1 / 60;
 
@@ -1133,16 +1162,13 @@ class PodRacingGame {
         this.podBody.position.copy(podPos);
         this.pod.position.copy(this.podBody.position);
 
-        const spaceshipRotationAxis = new THREE.Vector3(this.spaceshipRotationAxisX, this.spaceshipRotationAxisY, this.spaceshipRotationAxisZ).normalize();
-        const quaternion = new THREE.Quaternion();
-        quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), tangent);
-        const yawQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
-        const pitchQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), this.pitch);
-        quaternion.multiply(yawQuat).multiply(pitchQuat);
-        this.pod.quaternion.copy(quaternion);
-        
-        // Synchronize spaceship with pod’s movement and apply offsets
-        this.updateSpaceshipPositionAndRotation();
+        // Pod (camera/gun) reacts to mouse movement
+        const quaternionPod = new THREE.Quaternion();
+        quaternionPod.setFromUnitVectors(new THREE.Vector3(0, 0, -1), tangent);
+        const yawQuatPod = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
+        const pitchQuatPod = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), this.pitch);
+        quaternionPod.multiply(yawQuatPod).multiply(pitchQuatPod);
+        this.pod.quaternion.copy(quaternionPod);
 
         if (!this.moveLeft && !this.moveRight) this.podOffsetX *= 0.9;
         if (!this.moveUp && !this.moveDown) this.podOffsetY *= 0.9;
@@ -1163,15 +1189,26 @@ class PodRacingGame {
             case 0:
                 this.camera.position.copy(this.pod.position).addScaledVector(tangent, -2);
                 this.camera.quaternion.copy(this.pod.quaternion);
+                // Show and position the neon square at a fixed offset, aligned with the path, if enabled
+                this.neonSquare.visible = this.showNeonSquare;
+                if (this.showNeonSquare) {
+                    this.neonSquare.position.copy(this.pod.position).addScaledVector(tangent, -3);
+                    const tangentNeon = this.trackPath.getTangentAt(this.podDistance / this.trackPath.getLength());
+                    const quaternionNeon = new THREE.Quaternion();
+                    quaternionNeon.setFromUnitVectors(new THREE.Vector3(0, 0, -1), tangentNeon);
+                    this.neonSquare.quaternion.copy(quaternionNeon);
+                }
                 break;
-            case 1:
-                this.camera.position.copy(this.pod.position).addScaledVector(tangent.negate(), 15).addScaledVector(normal, 5);
-                this.camera.lookAt(this.pod.position);
-                break;
-            case 2:
-                this.camera.position.set(0, 25000, 0);
-                this.camera.lookAt(new THREE.Vector3(0, 0, 0));
-                break;
+                case 1:
+                    this.camera.position.copy(this.pod.position).addScaledVector(tangent.negate(), 15).addScaledVector(normal, 5);
+                    this.camera.lookAt(this.pod.position);
+                    this.neonSquare.visible = false;
+                    break;
+                case 2:
+                    this.camera.position.set(0, 25000, 0);
+                    this.camera.lookAt(new THREE.Vector3(0, 0, 0));
+                    this.neonSquare.visible = false;
+                    break;
         }
 
         this.earth.rotation.y += 0.001;
