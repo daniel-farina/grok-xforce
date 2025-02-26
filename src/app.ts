@@ -37,6 +37,7 @@ class PodRacingGame {
     private rng: () => number = Math.random;
     private lives: number = 10;
     private score: number = 0;
+    private enemiesKilled: number = 0; // New counter for enemies killed
     private moveLeft: boolean = false;
     private moveRight: boolean = false;
     private moveUp: boolean = false;
@@ -46,7 +47,7 @@ class PodRacingGame {
     private countdown: number = 3;
     private countdownTimer: number = 0;
     private survivalTime: number = 0;
-    private basePodSpeed: number = 40; // Adjusted for 2-minute levels
+    private basePodSpeed: number = 40;
     private podSpeed: number = this.basePodSpeed;
     private podDistance: number = 0;
     private podOffsetX: number = 0;
@@ -56,18 +57,25 @@ class PodRacingGame {
     private cameraMode: number = 0;
     private livesCounter!: HTMLElement;
     private scoreCounter!: HTMLElement;
+    private enemiesKilledCounter!: HTMLElement; // New counter for enemies killed
     private countdownElement!: HTMLElement;
     private hud!: HTMLElement;
     private pauseMenu!: HTMLElement;
+    private gameOverMenu!: HTMLElement; // New game over menu
+    private restartButton!: HTMLElement; // New restart button
     private resumeButton!: HTMLElement;
     private thrusterParticles!: THREE.Points;
-    private hitParticles!: THREE.Points; // Particles for when pod is hit
+    private hitParticles!: THREE.Points;
     private explosionInstances: ExplosionInstance[] = [];
     private dynamicLight!: THREE.PointLight;
     private level: number = 1;
     private songs: HTMLAudioElement[] = [];
     private currentSongIndex: number = 0;
+    
     private explosionSound!: HTMLAudioElement;
+    private niceShotSound!: HTMLAudioElement; // New audio for kills
+    private holdTightSound!: HTMLAudioElement; // New audio for enemy spawns
+    private enemySpottedSound!: HTMLAudioElement; // New audio for enemy spawns
     private audioContext!: AudioContext;
     private mouseSensitivity: number = 0.002;
     private yaw: number = 0;
@@ -78,7 +86,7 @@ class PodRacingGame {
     private asteroidSpawnTimer: number = 0;
     private asteroidSpawnInterval: number = 6;
     private enemySpawnTimer: number = 0;
-    private enemySpawnInterval: number = 10; // Spawn every 10 seconds
+    private enemySpawnInterval: number = 10;
     private enemySpawnsThisLevel: number = 0;
     private asteroidModel: THREE.Group | null = null;
     private introAudio!: HTMLAudioElement;
@@ -103,7 +111,7 @@ class PodRacingGame {
     private alertsThisLevel: number = 0;
     private maxAlertsPerLevel: number = 3;
     private enemySpawnDistance: number = 900;
-    private enemyLateralOffset: number = 100;
+    private enemyLateralOffset: number = 200;
     private enemyBaseSpeed: number = 25;
     private enemyFireRate: number = 1000;
     private enemyBulletSpeed: number = 500;
@@ -123,10 +131,14 @@ class PodRacingGame {
     private spaceshipRotationAxisY: number = 0;
     private spaceshipRotationAxisZ: number = -1;
     private neonSquare!: THREE.LineLoop;
-    private showNeonSquare: boolean = true;
-    private showDebugControls: boolean = true;
-    private makePodVisible: boolean = false; // Pod invisible by default
-
+    private showNeonSquare: boolean = false; // Off by default
+    private showDebugControls: boolean = false; // Off by default
+    private makePodVisible: boolean = false;
+    private spaceshipEngineOscillator!: OscillatorNode; // Oscillator for engine sound
+    private spaceshipEngineGain!: GainNode; // Gain node for volume control
+    private spaceshipEngineFilter!: BiquadFilterNode; // New filter node
+    private backgroundMusicGain!: GainNode;
+    private isEngineSoundStarted: boolean = false;
     constructor() {
         this.initialize().then(() => {
             console.log("Game initialized");
@@ -141,6 +153,29 @@ class PodRacingGame {
         this.renderer.setClearColor(0x000000, 1);
         this.world.gravity.set(0, 0, 0);
 
+        // Setup spaceship engine sound
+    this.audioContext = new AudioContext();
+    this.spaceshipEngineOscillator = this.audioContext.createOscillator();
+    this.spaceshipEngineGain = this.audioContext.createGain();
+    this.spaceshipEngineFilter = this.audioContext.createBiquadFilter();
+
+    // Oscillator settings
+    this.spaceshipEngineOscillator.type = 'sawtooth';
+    this.spaceshipEngineOscillator.frequency.setValueAtTime(70, this.audioContext.currentTime);
+    this.spaceshipEngineGain.gain.setValueAtTime(0.01, this.audioContext.currentTime);
+
+    // Filter settings
+    this.spaceshipEngineFilter.type = 'lowpass';
+    this.spaceshipEngineFilter.frequency.setValueAtTime(2000, this.audioContext.currentTime); // Default cutoff
+    this.spaceshipEngineFilter.Q.setValueAtTime(1, this.audioContext.currentTime); // Resonance
+
+    // Connect: Oscillator -> Filter -> Gain -> Destination
+    this.spaceshipEngineOscillator.connect(this.spaceshipEngineFilter);
+    this.spaceshipEngineFilter.connect(this.spaceshipEngineGain);
+    this.spaceshipEngineGain.connect(this.audioContext.destination);
+
+    this.spaceshipEngineOscillator.start();
+    
         this.songs = [
             new Audio('/assets/music1.mp3'),
             new Audio('/assets/music2.mp3'),
@@ -152,23 +187,26 @@ class PodRacingGame {
                 this.songs[this.currentSongIndex].play().catch(err => console.error("Song playback failed:", err));
             });
         });
-
+    
         this.explosionSound = new Audio('/assets/explosion.mp3');
+        this.niceShotSound = new Audio('/assets/audio/nice_shot.mp3');
+        this.holdTightSound = new Audio('/assets/audio/hold_tight.mp3');
+        this.enemySpottedSound = new Audio('/assets/audio/enemy_spotted.mp3');
         this.introAudio = new Audio('/assets/intro-pilot.mp3');
         this.alertSounds = [];
         this.audioContext = new AudioContext();
-
+    
         this.assignDomElements();
         this.setupInput();
         this.setupControls();
-
+    
         this.countdownElement.style.display = "none";
         this.crosshair.style.display = "none";
         this.startButton.style.display = "none";
         this.difficultyMenu.style.display = "block";
         const controlsElement = document.getElementById("controls") as HTMLElement;
-        controlsElement.style.display = this.showDebugControls ? "block" : "none";
-
+        controlsElement.style.display = this.showDebugControls ? "block" : "none"; // Off by default
+    
         const textureLoader = new THREE.TextureLoader();
         this.asteroidTexture = await textureLoader.loadAsync('/assets/asteroid/asteroid_texture.jpg').catch(() => null);
         this.metalTexture = await textureLoader.loadAsync('/assets/metal.png').catch(() => null);
@@ -178,20 +216,27 @@ class PodRacingGame {
         this.livesCounter = document.getElementById("healthCounter") as HTMLElement;
         this.scoreCounter = document.getElementById("scoreCounter") as HTMLElement || document.createElement("div");
         this.scoreCounter.id = "scoreCounter";
+        this.enemiesKilledCounter = document.getElementById("enemiesKilledCounter") as HTMLElement || document.createElement("div");
+        this.enemiesKilledCounter.id = "enemiesKilledCounter";
         this.countdownElement = document.getElementById("countdown") as HTMLElement;
         this.hud = document.getElementById("hud") as HTMLElement;
         this.pauseMenu = document.getElementById("pauseMenu") as HTMLElement;
+        this.gameOverMenu = document.getElementById("gameOverMenu") as HTMLElement;
+        this.restartButton = document.getElementById("restartButton") as HTMLElement;
         this.resumeButton = document.getElementById("resumeButton") as HTMLElement;
         this.crosshair = document.getElementById("crosshair") as HTMLElement;
         this.startButton = document.getElementById("startButton") as HTMLElement;
         this.difficultyMenu = document.getElementById("difficultyMenu") as HTMLElement;
         this.hud.appendChild(this.scoreCounter);
+        this.hud.appendChild(this.enemiesKilledCounter);
         this.hud.style.display = "flex";
-        this.hud.style.justifyContent = "center";
+        this.hud.style.flexDirection = "column"; // Stack vertically on left
+        this.hud.style.justifyContent = "flex-start";
+        this.hud.style.alignItems = "flex-start";
         this.hud.style.position = "absolute";
         this.hud.style.top = "10px";
-        this.hud.style.left = "0";
-        this.hud.style.width = "100%";
+        this.hud.style.left = "10px"; // Left side
+        this.hud.style.width = "auto";
         this.countdownElement.style.position = "absolute";
         this.countdownElement.style.top = "50%";
         this.countdownElement.style.left = "50%";
@@ -245,14 +290,42 @@ class PodRacingGame {
         window.addEventListener('resize', () => this.handleResize());
     }
 
+    private restartGame(): void {
+        this.lives = 10; // Reset to initial lives based on difficulty could be added here
+        this.score = 0;
+        this.enemiesKilled = 0;
+        this.level = 1;
+        this.podDistance = 0;
+        this.survivalTime = 0;
+        this.podSpeed = this.basePodSpeed;
+        this.isPaused = false;
+        this.raceStarted = false;
+        this.gameOverMenu.style.display = "none";
+        this.scene.children.length = 0; // Clear scene
+        this.world.bodies.length = 0; // Clear physics world
+        this.obstacles = [];
+        this.bullets = [];
+        this.enemyShips = [];
+        this.enemyBullets = [];
+        this.explosionInstances = [];
+        this.lastEnemyShotTimes.clear();
+        this.enemyShotCounts.clear();
+        this.enemyHits.clear();
+        this.enemySpawnsThisLevel = 0;
+        this.alertsThisLevel = 0;
+        this.createScene().then(() => {
+            this.startCountdown();
+        });
+    }
+
     private setupInput(): void {
         document.addEventListener("keydown", (event) => {
-            if (this.isPaused) return;
+            if (this.isPaused && event.keyCode !== 27 && event.keyCode !== 82) return; // Allow Esc and R through
             switch (event.keyCode) {
-                case 65: this.moveRight = true; break; // A
-                case 68: this.moveLeft = true; break; // D
-                case 87: this.moveUp = true; break; // W
-                case 83: this.moveDown = true; break; // S
+                case 65: this.moveRight = true; break;
+                case 68: this.moveLeft = true; break;
+                case 87: this.moveUp = true; break;
+                case 83: this.moveDown = true; break;
                 case 32:
                     if (this.isIntroPlaying) {
                         this.isIntroPlaying = false;
@@ -291,13 +364,17 @@ class PodRacingGame {
                     const controlsElement = document.getElementById("controls") as HTMLElement;
                     controlsElement.style.display = this.showDebugControls ? "block" : "none";
                     break;
-                case 82: // 'R' key to toggle pod visibility
-                    this.makePodVisible = !this.makePodVisible;
-                    this.pod.visible = this.makePodVisible;
+                case 82: // 'R' toggles pod visibility or restarts game
+                    if (this.lives <= 0) {
+                        this.restartGame();
+                    } else {
+                        this.makePodVisible = !this.makePodVisible;
+                        this.pod.visible = this.makePodVisible;
+                    }
                     break;
             }
         });
-
+    
         document.addEventListener("keyup", (event) => {
             switch (event.keyCode) {
                 case 65: this.moveRight = false; break;
@@ -306,7 +383,7 @@ class PodRacingGame {
                 case 83: this.moveDown = false; break;
             }
         });
-
+    
         document.addEventListener("mousemove", (event) => {
             if (this.isPaused || !this.raceStarted || document.pointerLockElement !== this.canvas) return;
             const yawDelta = -event.movementX * this.mouseSensitivity;
@@ -314,24 +391,31 @@ class PodRacingGame {
             this.yaw = Math.max(-Math.PI / 4, Math.min(Math.PI / 4, this.yaw + yawDelta));
             this.pitch = Math.max(-Math.PI / 6, Math.min(Math.PI / 6, this.pitch + pitchDelta));
         });
-
+    
         this.startButton.addEventListener("click", () => {
             this.startButton.style.display = "none";
             this.isIntroPlaying = true;
         });
-
+    
         this.canvas.addEventListener("click", () => {
             if (!this.isPaused && document.pointerLockElement !== this.canvas && !this.isIntroPlaying && !this.raceStarted) {
                 this.canvas.requestPointerLock();
             }
+            if (this.audioContext.state === 'suspended') {
+        this.audioContext.resume();
+    }
         });
-
+    
         this.resumeButton.addEventListener("click", () => {
             this.isPaused = false;
             this.pauseMenu.style.display = "none";
             this.canvas.requestPointerLock();
         });
-
+    
+        this.restartButton.addEventListener("click", () => {
+            this.restartGame();
+        });
+    
         document.addEventListener("pointerlockchange", () => {
             if (document.pointerLockElement === this.canvas) {
                 this.crosshair.style.display = "block";
@@ -343,30 +427,46 @@ class PodRacingGame {
                 }
             }
         });
-
+    
         this.setupDifficultyButtons();
     }
 
     private setupControls(): void {
         const podTab = document.getElementById("podTab") as HTMLElement;
         const enemyTab = document.getElementById("enemyTab") as HTMLElement;
+        const engineTab = document.getElementById("engineTab") as HTMLElement;
         const podControls = document.getElementById("podControls") as HTMLElement;
         const enemyControls = document.getElementById("enemyControls") as HTMLElement;
-
+        const engineControls = document.getElementById("engineControls") as HTMLElement;
+    
         podTab.addEventListener("click", () => {
             podTab.classList.add("active");
             enemyTab.classList.remove("active");
+            engineTab.classList.remove("active");
             podControls.style.display = "block";
             enemyControls.style.display = "none";
+            engineControls.style.display = "none";
         });
-
+    
         enemyTab.addEventListener("click", () => {
             enemyTab.classList.add("active");
             podTab.classList.remove("active");
+            engineTab.classList.remove("active");
             enemyControls.style.display = "block";
             podControls.style.display = "none";
+            engineControls.style.display = "none";
         });
-
+    
+        engineTab.addEventListener("click", () => {
+            engineTab.classList.add("active");
+            podTab.classList.remove("active");
+            enemyTab.classList.remove("active");
+            engineControls.style.display = "block";
+            podControls.style.display = "none";
+            enemyControls.style.display = "none";
+        });
+    
+        // Spaceship Model Controls (unchanged)
         const scaleSlider = document.getElementById("spaceshipScale") as HTMLInputElement;
         const posXSlider = document.getElementById("spaceshipPosX") as HTMLInputElement;
         const posYSlider = document.getElementById("spaceshipPosY") as HTMLInputElement;
@@ -377,7 +477,7 @@ class PodRacingGame {
         const axisXSlider = document.getElementById("spaceshipAxisX") as HTMLInputElement;
         const axisYSlider = document.getElementById("spaceshipAxisY") as HTMLInputElement;
         const axisZSlider = document.getElementById("spaceshipAxisZ") as HTMLInputElement;
-
+    
         const scaleValue = document.getElementById("spaceshipScaleValue") as HTMLSpanElement;
         const posXValue = document.getElementById("spaceshipPosXValue") as HTMLSpanElement;
         const posYValue = document.getElementById("spaceshipPosYValue") as HTMLSpanElement;
@@ -388,99 +488,147 @@ class PodRacingGame {
         const axisXValue = document.getElementById("spaceshipAxisXValue") as HTMLSpanElement;
         const axisYValue = document.getElementById("spaceshipAxisYValue") as HTMLSpanElement;
         const axisZValue = document.getElementById("spaceshipAxisZValue") as HTMLSpanElement;
-
+    
         scaleSlider.addEventListener("input", () => {
             this.spaceshipScale = parseFloat(scaleSlider.value);
             this.spaceship.scale.set(this.spaceshipScale, this.spaceshipScale, this.spaceshipScale);
             scaleValue.textContent = this.spaceshipScale.toFixed(2);
         });
-
+    
         posXSlider.addEventListener("input", () => {
             this.spaceshipPositionX = parseFloat(posXSlider.value);
             this.updateSpaceshipPosition();
             posXValue.textContent = this.spaceshipPositionX.toFixed(2);
         });
-
+    
         posYSlider.addEventListener("input", () => {
             this.spaceshipPositionY = parseFloat(posYSlider.value);
             this.updateSpaceshipPosition();
             posYValue.textContent = this.spaceshipPositionY.toFixed(2);
         });
-
+    
         posZSlider.addEventListener("input", () => {
             this.spaceshipPositionZ = parseFloat(posZSlider.value);
             this.updateSpaceshipPosition();
             posZValue.textContent = this.spaceshipPositionZ.toFixed(2);
         });
-
+    
         rotXSlider.addEventListener("input", () => {
             this.spaceshipRotationX = parseFloat(rotXSlider.value) * Math.PI / 180;
             this.spaceship.rotation.x = this.spaceshipRotationX;
             rotXValue.textContent = rotXSlider.value;
         });
-
+    
         rotYSlider.addEventListener("input", () => {
             this.spaceshipRotationY = parseFloat(rotYSlider.value) * Math.PI / 180;
             this.spaceship.rotation.y = this.spaceshipRotationY;
             rotYValue.textContent = rotYSlider.value;
         });
-
+    
         rotZSlider.addEventListener("input", () => {
             this.spaceshipRotationZ = parseFloat(rotZSlider.value) * Math.PI / 180;
             this.spaceship.rotation.z = this.spaceshipRotationZ;
             rotZValue.textContent = rotZSlider.value;
         });
-
+    
         axisXSlider.addEventListener("input", () => {
             this.spaceshipRotationAxisX = parseFloat(axisXSlider.value);
             axisXValue.textContent = this.spaceshipRotationAxisX.toFixed(2);
         });
-
+    
         axisYSlider.addEventListener("input", () => {
             this.spaceshipRotationAxisY = parseFloat(axisYSlider.value);
             axisYValue.textContent = this.spaceshipRotationAxisY.toFixed(2);
         });
-
+    
         axisZSlider.addEventListener("input", () => {
             this.spaceshipRotationAxisZ = parseFloat(axisZSlider.value);
             axisZValue.textContent = this.spaceshipRotationAxisZ.toFixed(2);
         });
-
+    
+        // Enemy Controls (unchanged)
         const spawnDistanceSlider = document.getElementById("spawnDistance") as HTMLInputElement;
         const lateralOffsetSlider = document.getElementById("lateralOffset") as HTMLInputElement;
         const baseSpeedSlider = document.getElementById("baseSpeed") as HTMLInputElement;
         const fireRateSlider = document.getElementById("fireRate") as HTMLInputElement;
         const bulletSpeedSlider = document.getElementById("bulletSpeed") as HTMLInputElement;
-
+    
         const spawnDistanceValue = document.getElementById("spawnDistanceValue") as HTMLSpanElement;
         const lateralOffsetValue = document.getElementById("lateralOffsetValue") as HTMLSpanElement;
         const baseSpeedValue = document.getElementById("baseSpeedValue") as HTMLSpanElement;
         const fireRateValue = document.getElementById("fireRateValue") as HTMLSpanElement;
         const bulletSpeedValue = document.getElementById("bulletSpeedValue") as HTMLSpanElement;
-
+    
         spawnDistanceSlider.addEventListener("input", () => {
             this.enemySpawnDistance = parseInt(spawnDistanceSlider.value);
             spawnDistanceValue.textContent = this.enemySpawnDistance.toString();
         });
-
+    
         lateralOffsetSlider.addEventListener("input", () => {
             this.enemyLateralOffset = parseInt(lateralOffsetSlider.value);
             lateralOffsetValue.textContent = this.enemyLateralOffset.toString();
         });
-
+    
         baseSpeedSlider.addEventListener("input", () => {
             this.enemyBaseSpeed = parseInt(baseSpeedSlider.value);
             baseSpeedValue.textContent = this.enemyBaseSpeed.toString();
         });
-
+    
         fireRateSlider.addEventListener("input", () => {
             this.enemyFireRate = parseInt(fireRateSlider.value);
             fireRateValue.textContent = this.enemyFireRate.toString();
         });
-
+    
         bulletSpeedSlider.addEventListener("input", () => {
             this.enemyBulletSpeed = parseInt(bulletSpeedSlider.value);
             bulletSpeedValue.textContent = this.enemyBulletSpeed.toString();
+        });
+    
+        // Engine Sound Controls
+        const engineVolumeSlider = document.getElementById("engineVolume") as HTMLInputElement;
+        const engineFrequencySlider = document.getElementById("engineFrequency") as HTMLInputElement;
+        const engineDetuneSlider = document.getElementById("engineDetune") as HTMLInputElement;
+        const engineYawModSlider = document.getElementById("engineYawMod") as HTMLInputElement;
+        const engineFilterFreqSlider = document.getElementById("engineFilterFreq") as HTMLInputElement;
+        const engineTypeSelect = document.getElementById("engineType") as HTMLSelectElement;
+    
+        const engineVolumeValue = document.getElementById("engineVolumeValue") as HTMLSpanElement;
+        const engineFrequencyValue = document.getElementById("engineFrequencyValue") as HTMLSpanElement;
+        const engineDetuneValue = document.getElementById("engineDetuneValue") as HTMLSpanElement;
+        const engineYawModValue = document.getElementById("engineYawModValue") as HTMLSpanElement;
+        const engineFilterFreqValue = document.getElementById("engineFilterFreqValue") as HTMLSpanElement;
+    
+        engineVolumeSlider.addEventListener("input", () => {
+            const volume = parseFloat(engineVolumeSlider.value);
+            this.spaceshipEngineGain.gain.setValueAtTime(volume, this.audioContext.currentTime);
+            engineVolumeValue.textContent = volume.toFixed(2);
+        });
+    
+        engineFrequencySlider.addEventListener("input", () => {
+            const frequency = parseInt(engineFrequencySlider.value);
+            this.spaceshipEngineOscillator.frequency.setValueAtTime(frequency, this.audioContext.currentTime);
+            engineFrequencyValue.textContent = frequency.toString();
+        });
+    
+        engineDetuneSlider.addEventListener("input", () => {
+            const detune = parseInt(engineDetuneSlider.value);
+            this.spaceshipEngineOscillator.detune.setValueAtTime(detune, this.audioContext.currentTime);
+            engineDetuneValue.textContent = detune.toString();
+        });
+    
+        engineYawModSlider.addEventListener("input", () => {
+            const yawMod = parseInt(engineYawModSlider.value);
+            engineYawModValue.textContent = yawMod.toString();
+        });
+    
+        engineFilterFreqSlider.addEventListener("input", () => {
+            const filterFreq = parseInt(engineFilterFreqSlider.value);
+            this.spaceshipEngineFilter.frequency.setValueAtTime(filterFreq, this.audioContext.currentTime);
+            engineFilterFreqValue.textContent = filterFreq.toString(); 
+        });
+    
+        engineTypeSelect.addEventListener("change", () => {
+            this.spaceshipEngineOscillator.type = engineTypeSelect.value as OscillatorType;
         });
     }
 
@@ -595,7 +743,7 @@ class PodRacingGame {
         enemyGroup.position.copy(basePos)
             .addScaledVector(normal, (this.rng() - 0.5) * this.enemyLateralOffset)
             .addScaledVector(binormal, (this.rng() - 0.5) * this.enemyLateralOffset);
-        enemyGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), tangent.negate());
+            enemyGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), tangent); // Changed from tangent.negate()
         this.scene.add(enemyGroup);
 
         const enemyBody = new CANNON.Body({ mass: 1 });
@@ -611,8 +759,8 @@ class PodRacingGame {
 
     private async createScene(): Promise<void> {
         this.rng = seedrandom("pod_racing_seed");
-
-        const squareSize = 3;
+    
+        const squareSize = 2.6;
         const squareGeometry = new THREE.BufferGeometry();
         const squareVertices = new Float32Array([
             -squareSize, -squareSize, -3,
@@ -623,35 +771,35 @@ class PodRacingGame {
         squareGeometry.setAttribute('position', new THREE.BufferAttribute(squareVertices, 3));
         const squareMaterial = new THREE.LineBasicMaterial({ color: 0x00ffff, emissive: 0x00ffff, emissiveIntensity: 2, linewidth: 2 });
         this.neonSquare = new THREE.LineLoop(squareGeometry, squareMaterial);
-        this.neonSquare.visible = false;
+        this.neonSquare.visible = this.showNeonSquare; // Off by default
         this.scene.add(this.neonSquare);
-
+    
         const podGeometry = new THREE.BoxGeometry(4, 4, 4);
         const podMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000, metalness: 0.8, roughness: 0.2, emissive: 0x550000, emissiveIntensity: 1.5 });
         this.pod = new THREE.Mesh(podGeometry, podMaterial);
         this.pod.position.set(1500, 0, 0);
-        this.pod.visible = this.makePodVisible; // Invisible by default
+        this.pod.visible = this.makePodVisible;
         this.scene.add(this.pod);
-
+    
         const loader = new GLTFLoader();
         this.spaceship = await loader.loadAsync('/assets/spaceship/scene.gltf').then(gltf => gltf.scene).catch(() => {
             const fallbackGeometry = new THREE.BoxGeometry(4, 4, 4);
             const fallbackMaterial = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
             return new THREE.Group().add(new THREE.Mesh(fallbackGeometry, fallbackMaterial));
         });
-
+    
         this.spaceship.position.set(this.pod.position.x + this.spaceshipPositionX, this.pod.position.y + this.spaceshipPositionY, this.pod.position.z + this.spaceshipPositionZ);
         this.spaceship.scale.set(this.spaceshipScale, this.spaceshipScale, this.spaceshipScale);
         this.spaceship.rotation.set(this.spaceshipRotationX, this.spaceshipRotationY, this.spaceshipRotationZ);
         this.scene.add(this.spaceship);
-
+    
         this.podBody = new CANNON.Body({ mass: 1 });
         this.podBody.addShape(new CANNON.Box(new CANNON.Vec3(2, 2, 2)));
         this.podBody.position.copy(this.pod.position);
         this.world.addBody(this.podBody);
-
-        // Track length adjusted for 2-minute duration (120 seconds)
-        const trackLength = this.basePodSpeed * 120; // Distance = speed * time
+    
+        // Track length reduced by 50% (from 120s to 60s)
+        const trackLength = this.basePodSpeed * 60; // Distance = speed * time (1 minute)
         const points = [];
         const numPoints = 33;
         for (let i = 0; i < numPoints; i++) {
@@ -662,14 +810,14 @@ class PodRacingGame {
             points.push(new THREE.Vector3(x, y, z));
         }
         this.trackPath = new THREE.CatmullRomCurve3(points, false, 'centripetal', 0.5);
-
+    
         const pathPoints = this.trackPath.getPoints(512);
         const pathGeometry = new THREE.BufferGeometry().setFromPoints(pathPoints);
         const pathMaterial = new THREE.LineBasicMaterial({ color: 0x00ffff, emissive: 0x00ffff, linewidth: 5, emissiveIntensity: 2 });
         this.pathLine = new THREE.Line(pathGeometry, pathMaterial);
         this.pathLine.visible = this.showPathLine;
         this.scene.add(this.pathLine);
-
+    
         const baseAsteroidCount = 150;
         const asteroidCount = baseAsteroidCount + Math.floor((this.level - 1) * (1350 / 99));
         for (let i = 0; i < asteroidCount; i++) {
@@ -681,17 +829,17 @@ class PodRacingGame {
             const offsetZ = (this.rng() - 0.5) * 1000;
             const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
             const binormal = tangent.clone().cross(normal).normalize();
-
+    
             const scaleFactor = 0.2 + this.rng() * 0.8;
             const asteroid = this.generateAsteroid(scaleFactor);
             asteroid.position.copy(basePos).addScaledVector(normal, offsetX).addScaledVector(binormal, offsetY).addScaledVector(tangent, offsetZ);
             this.scene.add(asteroid);
-
+    
             const obstacleBody = new CANNON.Body({ mass: 1 });
             obstacleBody.addShape(new CANNON.Box(new CANNON.Vec3(40 * scaleFactor, 40 * scaleFactor, 40 * scaleFactor)));
             obstacleBody.position.copy(asteroid.position);
             this.world.addBody(obstacleBody);
-
+    
             this.obstacles.push({ mesh: asteroid, body: obstacleBody, isFullAsteroid: true });
         }
 
@@ -961,33 +1109,35 @@ class PodRacingGame {
 
     private animate(): void {
         requestAnimationFrame(() => this.animate());
-
+    
         this.updateSpaceshipPosition();
-
+    
         const tangentSpaship = this.trackPath.getTangentAt(this.podDistance / this.trackPath.getLength());
         if (this.cameraMode === 0) {
-            this.neonSquare.visible = true;
-            this.neonSquare.position.copy(this.pod.position).addScaledVector(tangentSpaship, -3);
-            const tangentNeon = this.trackPath.getTangentAt(this.podDistance / this.trackPath.getLength());
-            const quaternionNeon = new THREE.Quaternion();
-            quaternionNeon.setFromUnitVectors(new THREE.Vector3(0, 0, -1), tangentNeon);
-            this.neonSquare.quaternion.copy(quaternionNeon);
+            this.neonSquare.visible = this.showNeonSquare; // Controlled by showNeonSquare
+            if (this.showNeonSquare) {
+                this.neonSquare.position.copy(this.pod.position).addScaledVector(tangentSpaship, -3);
+                const tangentNeon = this.trackPath.getTangentAt(this.podDistance / this.trackPath.getLength());
+                const quaternionNeon = new THREE.Quaternion();
+                quaternionNeon.setFromUnitVectors(new THREE.Vector3(0, 0, -1), tangentNeon);
+                this.neonSquare.quaternion.copy(quaternionNeon);
+            }
         } else {
             this.neonSquare.visible = false;
         }
-
+    
         if (this.isPaused) {
             this.renderer.render(this.scene, this.camera);
             return;
         }
         this.world.step(1 / 60);
         const deltaTime = 1 / 60;
-
+    
         if (this.difficultyMenu.style.display === "block") {
             this.renderer.render(this.scene, this.camera);
             return;
         }
-
+    
         if (this.startButton.style.display !== "none") {
             const startPos = this.trackPath.getPointAt(0);
             this.camera.position.copy(startPos);
@@ -996,22 +1146,22 @@ class PodRacingGame {
             this.renderer.render(this.scene, this.camera);
             return;
         }
-
+    
         if (this.isIntroPlaying) {
             this.introTime += deltaTime;
             const angle = (this.introTime / (this.introDuration * 5)) * 2 * Math.PI;
             const radius = 20;
             const podPos = this.pod.position;
-
+    
             this.camera.position.set(
                 podPos.x + radius * Math.cos(angle),
                 podPos.y + 5,
                 podPos.z + radius * Math.sin(angle)
             );
             this.camera.lookAt(podPos);
-
+    
             this.renderer.render(this.scene, this.camera);
-
+    
             if (this.introTime >= this.introDuration || this.introAudio.ended) {
                 this.isIntroPlaying = false;
                 this.introTime = 0;
@@ -1020,7 +1170,7 @@ class PodRacingGame {
             }
             return;
         }
-
+    
         if (!this.raceStarted) {
             if (this.introTime < 1) {
                 this.introTime += deltaTime * 2;
@@ -1028,16 +1178,16 @@ class PodRacingGame {
                 const tangent = this.trackPath.getTangentAt(t);
                 const targetPos = this.pod.position.clone().addScaledVector(tangent, -2);
                 const startPos = this.camera.position.clone();
-
+    
                 this.camera.position.lerpVectors(startPos, targetPos, this.introTime);
                 this.camera.lookAt(this.pod.position);
             }
-
+    
             this.countdownTimer += deltaTime;
             const timeLeft = Math.max(0, this.countdown - this.countdownTimer);
             this.countdownElement.textContent = timeLeft > 0 ? `${Math.ceil(timeLeft)}` : `Level ${this.level} - Go!`;
             this.renderer.render(this.scene, this.camera);
-
+    
             if (timeLeft <= 0) {
                 this.raceStarted = true;
                 this.countdownElement.style.display = "none";
@@ -1045,14 +1195,13 @@ class PodRacingGame {
             }
             return;
         }
-
+    
         this.survivalTime += deltaTime;
         this.score += this.podSpeed * deltaTime;
-
+    
         const trackLength = this.trackPath.getLength();
         this.podDistance += this.podSpeed * deltaTime;
-
-        // Check for level completion (2 minutes = 120 seconds)
+    
         if (this.podDistance >= trackLength) {
             this.level += 1;
             if (this.level > 100) {
@@ -1063,14 +1212,14 @@ class PodRacingGame {
             }
             this.podDistance = 0;
             this.survivalTime = 0;
-            this.podSpeed = this.basePodSpeed * (1 + (this.level - 1) * 0.01); // Increase speed by 1% per level
+            this.podSpeed = this.basePodSpeed * (1 + (this.level - 1) * 0.01);
             this.scene.remove(this.pathLine);
             this.obstacles.forEach(o => {
                 this.scene.remove(o.mesh);
                 this.world.removeBody(o.body);
                 if (o.body.userData?.debugMesh) this.scene.remove(o.body.userData.debugMesh);
             });
-
+    
             this.enemyShips.forEach(enemy => {
                 this.scene.remove(enemy.mesh);
                 this.world.removeBody(enemy.body);
@@ -1094,47 +1243,53 @@ class PodRacingGame {
             this.alertsThisLevel = 0;
             this.createScene();
             this.pathLine.visible = this.showPathLine;
-            this.startCountdown(); // Start countdown for next level
+            this.startCountdown();
             return;
         }
-
+    
         const t = this.podDistance / trackLength;
         const basePos = this.trackPath.getPointAt(t);
         const tangent = this.trackPath.getTangentAt(t);
         const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
         const binormal = tangent.clone().cross(normal).normalize();
-
+    
         const maxOffset = 20;
         const moveSpeed = 30;
         const lerpFactor = 0.1;
-
+    
         const rightDir = new THREE.Vector3(1, 0, 0);
         const upDir = new THREE.Vector3(0, 1, 0);
         if (this.moveLeft) this.podOffsetX -= moveSpeed * deltaTime;
         if (this.moveRight) this.podOffsetX += moveSpeed * deltaTime;
         if (this.moveUp) this.podOffsetY += moveSpeed * deltaTime;
         if (this.moveDown) this.podOffsetY -= moveSpeed * deltaTime;
-
+    
         this.podOffsetX = Math.max(-maxOffset, Math.min(maxOffset, this.podOffsetX));
         this.podOffsetY = Math.max(-maxOffset, Math.min(maxOffset, this.podOffsetY));
-
+    
         this.currentOffsetX = THREE.MathUtils.lerp(this.currentOffsetX, this.podOffsetX, lerpFactor);
         this.currentOffsetY = THREE.MathUtils.lerp(this.currentOffsetY, this.podOffsetY, lerpFactor);
-
+    
         const podOffsetVec = rightDir.clone().multiplyScalar(this.currentOffsetX).add(upDir.clone().multiplyScalar(this.currentOffsetY));
         const podPos = basePos.clone().add(podOffsetVec);
         this.podBody.position.copy(podPos);
         this.pod.position.copy(this.podBody.position);
-
+    
         const quaternionPod = new THREE.Quaternion();
         quaternionPod.setFromUnitVectors(new THREE.Vector3(0, 0, -1), tangent);
         const yawQuatPod = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
         const pitchQuatPod = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), this.pitch);
         quaternionPod.multiply(yawQuatPod).multiply(pitchQuatPod);
         this.pod.quaternion.copy(quaternionPod);
-
+    
         if (!this.moveLeft && !this.moveRight) this.podOffsetX *= 0.9;
         if (!this.moveUp && !this.moveDown) this.podOffsetY *= 0.9;
+    
+         // Update spaceship engine sound based on yaw
+    const baseFrequency = 100; // Base engine frequency
+    const yawRange = Math.PI / 4; // Max yaw range from setupInput
+    const frequencyShift = (this.yaw / yawRange) * 50; // Shift frequency by ±50 Hz
+    this.spaceshipEngineOscillator.frequency.setValueAtTime(baseFrequency + frequencyShift, this.audioContext.currentTime);
 
         const tNext = Math.min(t + 0.01, 1);
         const tangentNext = this.trackPath.getTangentAt(tNext);
@@ -1147,32 +1302,22 @@ class PodRacingGame {
             this.lastAlertTime = currentTime;
             this.alertsThisLevel++;
         }
-
+    
         switch (this.cameraMode) {
             case 0:
                 this.camera.position.copy(this.pod.position).addScaledVector(tangent, -2);
                 this.camera.quaternion.copy(this.pod.quaternion);
-                this.neonSquare.visible = this.showNeonSquare;
-                if (this.showNeonSquare) {
-                    this.neonSquare.position.copy(this.pod.position).addScaledVector(tangent, -3);
-                    const tangentNeon = this.trackPath.getTangentAt(this.podDistance / trackLength);
-                    const quaternionNeon = new THREE.Quaternion();
-                    quaternionNeon.setFromUnitVectors(new THREE.Vector3(0, 0, -1), tangentNeon);
-                    this.neonSquare.quaternion.copy(quaternionNeon);
-                }
                 break;
             case 1:
                 this.camera.position.copy(this.pod.position).addScaledVector(tangent.negate(), 15).addScaledVector(normal, 5);
                 this.camera.lookAt(this.pod.position);
-                this.neonSquare.visible = false;
                 break;
             case 2:
                 this.camera.position.set(0, 25000, 0);
                 this.camera.lookAt(new THREE.Vector3(0, 0, 0));
-                this.neonSquare.visible = false;
                 break;
         }
-
+    
         this.earth.rotation.y += 0.001;
         this.mars.rotation.y += 0.0009;
         this.moonOrbitAngle += 0.0005;
@@ -1182,7 +1327,7 @@ class PodRacingGame {
             this.earth.position.z + Math.sin(this.moonOrbitAngle) * this.moonOrbitRadius
         );
         this.moon.rotation.y += 0.0003;
-
+    
         this.additionalPlanets.forEach(planet => {
             planet.mesh.rotation.y += planet.rotationSpeed;
             if (planet.rings) planet.rings.rotation.z += planet.rotationSpeed * 0.5;
@@ -1198,26 +1343,45 @@ class PodRacingGame {
                 });
             }
         });
-
+    
         for (let i = this.obstacles.length - 1; i >= 0; i--) {
             const obstacle = this.obstacles[i];
             if (!obstacle.mesh || !obstacle.body) continue;
             obstacle.mesh.rotation.x += 0.0025;
             obstacle.mesh.rotation.y += 0.0025;
             obstacle.mesh.rotation.z += 0.0025;
-
+    
             obstacle.mesh.position.copy(obstacle.body.position);
             if (obstacle.body.userData?.debugMesh) {
                 obstacle.body.userData.debugMesh.position.copy(obstacle.body.position);
             }
-
+    
             const aggressionFactor = Math.min(this.level / 100, 1);
             if (this.rng() < aggressionFactor * 0.12) {
                 const directionToPod = this.pod.position.clone().sub(obstacle.mesh.position).normalize();
                 obstacle.body.velocity.set(directionToPod.x * 30 * aggressionFactor, directionToPod.y * 30 * aggressionFactor, directionToPod.z * 30 * aggressionFactor);
             }
+    
+            const scaleFactor = obstacle.mesh.scale.x;
+            if (this.pod.position.distanceTo(obstacle.mesh.position) < 6 * scaleFactor) {
+                this.explosionSound.play();
+                const directionAway = obstacle.mesh.position.clone().sub(this.pod.position).normalize();
+                obstacle.body.velocity.set(directionAway.x * 50, directionAway.y * 50, directionAway.z * 50);
+                this.splitAsteroid(obstacle.mesh as THREE.Mesh, obstacle.body, scaleFactor);
+                this.scene.remove(obstacle.mesh);
+                this.world.removeBody(obstacle.body);
+                if (obstacle.body.userData?.debugMesh) this.scene.remove(obstacle.body.userData.debugMesh);
+                this.obstacles.splice(i, 1);
+                this.lives -= 1;
+                this.podSpeed *= 0.8;
+                this.triggerHitParticles();
+                if (this.lives <= 0) {
+                    this.isPaused = true;
+                    this.gameOverMenu.style.display = "block"; // Show game over menu
+                }
+            }
         }
-
+    
         for (let i = this.bullets.length - 1; i >= 0; i--) {
             const bullet = this.bullets[i];
             if (!bullet.mesh || !bullet.body) {
@@ -1226,7 +1390,7 @@ class PodRacingGame {
             }
             bullet.mesh.position.copy(bullet.body.position);
             bullet.mesh.visible = true;
-
+    
             let bulletHit = false;
             for (let j = this.obstacles.length - 1; j >= 0; j--) {
                 const obstacle = this.obstacles[j];
@@ -1242,16 +1406,14 @@ class PodRacingGame {
                     this.splitAsteroid(obstacle.mesh as THREE.Mesh, obstacle.body, scaleFactor);
                     this.scene.remove(obstacle.mesh);
                     this.world.removeBody(obstacle.body);
-                    if (obstacle.body.userData?.debugMesh) {
-                        this.scene.remove(obstacle.body.userData.debugMesh);
-                    }
+                    if (obstacle.body.userData?.debugMesh) this.scene.remove(obstacle.body.userData.debugMesh);
                     this.obstacles.splice(j, 1);
                     bulletHit = true;
                     this.score += 50;
                     break;
                 }
             }
-
+    
             const distanceFromOrigin = bullet.mesh.position.length();
             if (bulletHit || distanceFromOrigin > 20000) {
                 this.scene.remove(bullet.mesh);
@@ -1259,33 +1421,7 @@ class PodRacingGame {
                 this.bullets.splice(i, 1);
             }
         }
-
-        for (let i = this.obstacles.length - 1; i >= 0; i--) {
-            const obstacle = this.obstacles[i];
-            if (!obstacle.mesh || !obstacle.body) continue;
-            const scaleFactor = obstacle.mesh.scale.x;
-            if (this.pod.position.distanceTo(obstacle.mesh.position) < 6 * scaleFactor) {
-                this.explosionSound.play();
-                const directionAway = obstacle.mesh.position.clone().sub(this.pod.position).normalize();
-                obstacle.body.velocity.set(directionAway.x * 50, directionAway.y * 50, directionAway.z * 50);
-                this.splitAsteroid(obstacle.mesh as THREE.Mesh, obstacle.body, scaleFactor);
-                this.scene.remove(obstacle.mesh);
-                this.world.removeBody(obstacle.body);
-                if (obstacle.body.userData?.debugMesh) {
-                    this.scene.remove(obstacle.body.userData.debugMesh);
-                }
-                this.obstacles.splice(i, 1);
-                this.lives -= 1;
-                this.podSpeed *= 0.8;
-                this.triggerHitParticles();
-                if (this.lives <= 0) {
-                    this.isPaused = true;
-                    this.pauseMenu.style.display = "block";
-                    alert(`Game Over! Final Score: ${Math.floor(this.score)}`);
-                }
-            }
-        }
-
+    
         this.asteroidSpawnTimer += deltaTime;
         const spawnInterval = this.asteroidSpawnInterval * (1 - (this.level - 1) / 100);
         const asteroidsToSpawn = Math.floor(this.asteroidSpawnTimer / spawnInterval);
@@ -1300,53 +1436,55 @@ class PodRacingGame {
                 const offsetY = minOffset + this.rng() * (maxOffset - minOffset);
                 const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
                 const binormal = tangent.clone().cross(normal).normalize();
-
+    
                 const scaleFactor = 0.2 + this.rng() * 0.8;
                 const asteroid = this.generateAsteroid(scaleFactor);
                 asteroid.position.copy(basePos)
                     .addScaledVector(normal, offsetX * (this.rng() < 0.5 ? 1 : -1))
                     .addScaledVector(binormal, offsetY * (this.rng() < 0.5 ? 1 : -1));
                 this.scene.add(asteroid);
-
+    
                 const obstacleBody = new CANNON.Body({ mass: 1 });
                 obstacleBody.addShape(new CANNON.Box(new CANNON.Vec3(40 * scaleFactor, 40 * scaleFactor, 40 * scaleFactor)));
                 obstacleBody.position.copy(asteroid.position);
                 this.world.addBody(obstacleBody);
-
+    
                 this.obstacles.push({ mesh: asteroid, body: obstacleBody, isFullAsteroid: true });
             }
             this.asteroidSpawnTimer = this.asteroidSpawnTimer % spawnInterval;
         }
-
-        // Enemy spawning: 3 at level 1 to 20 at level 100
+    
         this.enemySpawnTimer += deltaTime;
         if (this.enemySpawnTimer >= this.enemySpawnInterval) {
-            const enemyCount = Math.floor(3 + (this.level - 1) * (17 / 99)); // Linear increase from 3 to 20
+            const enemyCount = Math.floor(3 + (this.level - 1) * (17 / 99));
             for (let i = 0; i < enemyCount; i++) {
-                if (this.rng() < 0.5) { // Random chance to spawn
+                if (this.rng() < 0.5) {
                     this.spawnEnemyShip();
+                    // Randomly play hold_tight or enemy_spotted every 20-30 enemies
+                    if (this.enemySpawnsThisLevel % (20 + Math.floor(this.rng() * 11)) === 0) {
+                        const sound = this.rng() < 0.5 ? this.holdTightSound : this.enemySpottedSound;
+                        sound.play().catch(err => console.error("Audio playback failed:", err));
+                    }
                 }
             }
             this.enemySpawnTimer = 0;
         }
-
+    
         function makeDistortionCurve(amount) {
             const samples = 44100;
             const curve = new Float32Array(samples);
             const deg = Math.PI / 180;
-            
             for (let i = 0; i < samples; ++i) {
                 const x = i * 2 / samples - 1;
                 curve[i] = (3 + amount) * x * 20 * deg / (Math.PI + amount * Math.abs(x));
             }
-            
             return curve;
         }
-
+    
         for (let i = this.enemyShips.length - 1; i >= 0; i--) {
             const enemy = this.enemyShips[i];
             enemy.mesh.position.copy(enemy.body.position);
-        
+    
             const distanceToPod = enemy.mesh.position.distanceTo(this.pod.position);
             const speed = this.enemyBaseSpeed * (1 + (this.enemySpawnDistance - distanceToPod) / this.enemySpawnDistance);
             const directionToPod = this.pod.position.clone().sub(enemy.mesh.position).normalize();
@@ -1358,7 +1496,7 @@ class PodRacingGame {
             );
             directionToPod.add(erraticOffset).normalize();
             enemy.body.velocity.set(directionToPod.x * speed, directionToPod.y * speed, directionToPod.z * speed);
-        
+    
             const currentTime = performance.now();
             const lastShotTime = this.lastEnemyShotTimes.get(enemy.body) || 0;
             let shotsFired = this.enemyShotCounts.get(enemy.body) || 0;
@@ -1382,24 +1520,24 @@ class PodRacingGame {
                 gainNode.connect(this.audioContext.destination);
                 oscillator.start();
                 oscillator.stop(this.audioContext.currentTime + 0.25);
-        
+    
                 const bulletGeometry = new THREE.SphereGeometry(1, 8, 8);
                 const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
                 const bulletMesh = new THREE.Mesh(bulletGeometry, bulletMaterial);
                 bulletMesh.position.copy(enemy.mesh.position).add(directionToPod.clone().multiplyScalar(8));
                 this.scene.add(bulletMesh);
-        
+    
                 const bulletBody = new CANNON.Body({ mass: 1 });
                 bulletBody.addShape(new CANNON.Sphere(1));
                 bulletBody.position.copy(bulletMesh.position);
                 bulletBody.velocity.set(directionToPod.x * this.enemyBulletSpeed, directionToPod.y * this.enemyBulletSpeed, directionToPod.z * this.enemyBulletSpeed);
                 this.world.addBody(bulletBody);
-        
+    
                 this.enemyBullets.push({ mesh: bulletMesh, body: bulletBody });
                 this.lastEnemyShotTimes.set(enemy.body, currentTime);
                 shotsFired++;
                 this.enemyShotCounts.set(enemy.body, shotsFired);
-        
+    
                 if (shotsFired >= this.shotsToLoseLife) {
                     this.scene.remove(enemy.mesh);
                     this.world.removeBody(enemy.body);
@@ -1410,12 +1548,11 @@ class PodRacingGame {
                     continue;
                 }
             }
-
+    
             for (let j = this.bullets.length - 1; j >= 0; j--) {
                 const bullet = this.bullets[j];
                 if (bullet.mesh.position.distanceTo(enemy.mesh.position) < 8) {
                     this.triggerEnemyExplosion(enemy.mesh.position);
-
                     this.scene.remove(enemy.mesh);
                     this.world.removeBody(enemy.body);
                     this.lastEnemyShotTimes.delete(enemy.body);
@@ -1426,10 +1563,15 @@ class PodRacingGame {
                     this.world.removeBody(bullet.body);
                     this.bullets.splice(j, 1);
                     this.score += 100;
+                    this.enemiesKilled += 1;
+                    // Play nice_shot.mp3 every 10-15 kills
+                    if (this.enemiesKilled % (10 + Math.floor(this.rng() * 6)) === 0) {
+                        this.niceShotSound.play().catch(err => console.error("Audio playback failed:", err));
+                    }
                     break;
                 }
             }
-
+    
             if (distanceToPod < 12) {
                 this.lives -= 2;
                 this.triggerHitParticles();
@@ -1441,8 +1583,7 @@ class PodRacingGame {
                 this.enemyShips.splice(i, 1);
                 if (this.lives <= 0) {
                     this.isPaused = true;
-                    this.pauseMenu.style.display = "block";
-                    alert(`Game Over! Final Score: ${Math.floor(this.score)}`);
+                    this.gameOverMenu.style.display = "block";
                 }
             } else if (distanceToPod > 1000 && shotsFired < this.shotsToLoseLife) {
                 this.lives -= 1;
@@ -1455,16 +1596,15 @@ class PodRacingGame {
                 this.enemyShips.splice(i, 1);
                 if (this.lives <= 0) {
                     this.isPaused = true;
-                    this.pauseMenu.style.display = "block";
-                    alert(`Game Over! Final Score: ${Math.floor(this.score)}`);
+                    this.gameOverMenu.style.display = "block";
                 }
             }
         }
-
+    
         for (let i = this.enemyBullets.length - 1; i >= 0; i--) {
             const bullet = this.enemyBullets[i];
             bullet.mesh.position.copy(bullet.body.position);
-
+    
             let firingEnemy: CANNON.Body | undefined;
             for (const enemy of this.enemyShips) {
                 if (bullet.body.position.distanceTo(enemy.body.position) < 100) {
@@ -1472,7 +1612,7 @@ class PodRacingGame {
                     break;
                 }
             }
-
+    
             if (bullet.mesh.position.distanceTo(this.pod.position) < 5 && firingEnemy) {
                 let hits = (this.enemyHits.get(firingEnemy) || 0) + 1;
                 this.enemyHits.set(firingEnemy, hits);
@@ -1482,8 +1622,7 @@ class PodRacingGame {
                     this.enemyHits.set(firingEnemy, 0);
                     if (this.lives <= 0) {
                         this.isPaused = true;
-                        this.pauseMenu.style.display = "block";
-                        alert(`Game Over! Final Score: ${Math.floor(this.score)}`);
+                        this.gameOverMenu.style.display = "block";
                     }
                 }
                 this.scene.remove(bullet.mesh);
@@ -1495,55 +1634,52 @@ class PodRacingGame {
                 this.enemyBullets.splice(i, 1);
             }
         }
-
+    
         if (this.dynamicLight) {
             this.dynamicLight.position.copy(this.pod.position);
             this.dynamicLight.intensity = 4 + Math.sin(this.survivalTime * 2) * 2;
         }
-
+    
         for (let i = this.explosionInstances.length - 1; i >= 0; i--) {
             const instance = this.explosionInstances[i];
             const positions = instance.particles.geometry.attributes.position.array as Float32Array;
             let allExpired = true;
-
+    
             for (let j = 0; j < positions.length; j += 3) {
                 if (instance.lifetimes[j / 3] > 0) {
                     positions[j] += instance.velocities[j / 3].x * deltaTime;
                     positions[j + 1] += instance.velocities[j / 3].y * deltaTime;
                     positions[j + 2] += instance.velocities[j / 3].z * deltaTime;
-
+    
                     instance.lifetimes[j / 3] -= deltaTime;
                     allExpired = false;
-
+    
                     const material = instance.particles.material as THREE.PointsMaterial;
                     material.opacity = Math.max(0, instance.lifetimes[j / 3] / instance.duration);
                 }
             }
-
+    
             instance.particles.geometry.attributes.position.needsUpdate = true;
             if (allExpired) {
                 this.scene.remove(instance.particles);
                 this.explosionInstances.splice(i, 1);
             }
         }
-
-        // Update hit particles
+    
         this.updateHitParticles(deltaTime);
-
+    
         const progress = (this.podDistance / trackLength) * 100;
         const progressBar = document.getElementById("progressBar") as HTMLElement;
         if (progressBar) {
-            progressBar.style.setProperty('--progress-width', `${progress}%`); // Update CSS variable for ::before
+            progressBar.style.setProperty('--progress-width', `${progress}%`);
             const progressText = progressBar.querySelector('span') as HTMLElement;
             if (progressText) {
-                progressText.textContent = `${Math.floor(progress)}%`; // Update percentage text
+                progressText.textContent = `${Math.floor(progress)}%`;
             }
         }
     
         this.updateHUD();
         this.renderer.render(this.scene, this.camera);
-    
-
     }
 
     private updateHUD(): void {
