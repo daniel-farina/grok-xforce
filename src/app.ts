@@ -19,6 +19,17 @@ interface ExplosionInstance {
     duration: number;
 }
 
+
+interface Planet {
+    mesh: THREE.Mesh;
+    rings?: THREE.Mesh;
+    stars?: THREE.Mesh[];
+    rotationSpeed: number;
+    rotationSpeedX?: number; // Optional, defaults to 0
+    rotationSpeedY?: number; // Optional, defaults to rotationSpeed
+    rotationSpeedZ?: number; // Optional, defaults to 0
+}
+
 class PodRacingGame {
     private scene: THREE.Scene = new THREE.Scene();
     private camera: THREE.PerspectiveCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100000);
@@ -101,7 +112,7 @@ class PodRacingGame {
     private mars!: THREE.Mesh;
     private moon!: THREE.Mesh;
     private earthAtmosphere!: THREE.Mesh;
-    private additionalPlanets: { mesh: THREE.Mesh, rings?: THREE.Mesh, stars?: THREE.Mesh[], rotationSpeed: number }[] = [];
+    private additionalPlanets: Planet[] = [];
     private moonOrbitRadius: number = 2000;
     private moonOrbitAngle: number = 0;
     private showPathLine: boolean = false;
@@ -181,8 +192,10 @@ private fastShotRounds: number = 0; // Remaining fast shots
 private baseFireRate: number = 100; // Default fire rate (store separately)
 private weavingTimers: Map<CANNON.Body, number> = new Map(); // Track weaving for each speedster
 
-
-
+private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[], lifetimes: number[] }[] = [];
+    private nebulaColors = [0x0000ff, 0x800080, 0xff00ff, 0x00ff00]; // Blue, purple, pink, green
+    private enemyVideoTexture: THREE.VideoTexture | null = null;
+    private purplePlanetVideoTexture: THREE.VideoTexture | null = null;
 
     constructor() {
         this.initialize().then(() => {
@@ -317,7 +330,35 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
             return null;
         });
         this.metalTexture = await textureLoader.loadAsync('/assets/metal.png').catch(() => null);
+    
+// Enemy video texture with safety check
+const enemyVideo = document.getElementById('enemyVideo') as HTMLVideoElement;
+if (!enemyVideo) {
+    console.error("Enemy video element not found in DOM");
+    this.enemyVideoTexture = null; // Fallback to null or use metalTexture later
+} else {
+    enemyVideo.play().catch(err => console.error("Enemy video playback failed:", err));
+    this.enemyVideoTexture = new THREE.VideoTexture(enemyVideo);
+    this.enemyVideoTexture.minFilter = THREE.LinearFilter;
+    this.enemyVideoTexture.magFilter = THREE.LinearFilter;
+    this.enemyVideoTexture.format = THREE.RGBFormat;
+}
+
+ // Purple planet video texture
+ const purplePlanetVideo = document.getElementById('purplePlanetVideo') as HTMLVideoElement;
+ if (!purplePlanetVideo) {
+     console.error("Purple planet video element not found in DOM");
+     this.purplePlanetVideoTexture = null;
+ } else {
+     purplePlanetVideo.play().catch(err => console.error("Purple planet video playback failed:", err));
+     this.purplePlanetVideoTexture = new THREE.VideoTexture(purplePlanetVideo);
+     this.purplePlanetVideoTexture.minFilter = THREE.LinearFilter;
+     this.purplePlanetVideoTexture.magFilter = THREE.LinearFilter;
+     this.purplePlanetVideoTexture.format = THREE.RGBFormat;
+ }
+
     }
+    
     private assignDomElements(): void {
         this.livesCounter = document.getElementById("healthCounter") as HTMLElement;
         this.scoreCounter = document.getElementById("scoreCounter") as HTMLElement;
@@ -369,17 +410,33 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
     private spawnSpeedsterShip(): void {
         const speedsterGroup = new THREE.Group();
         
-        const bodyGeometry = new THREE.ConeGeometry(10, 30, 16);
-        const bodyMaterial = new THREE.MeshStandardMaterial({
-            color: 0x00ffff,
-            metalness: 0.9,
-            roughness: 0.2,
-            emissive: 0x00aaaa,
-            emissiveIntensity: 1.5
+        const sphereGeometry = new THREE.SphereGeometry(10, 32, 32);
+        const video = document.getElementById('nebulaVideo') as HTMLVideoElement;
+        video.play().catch(err => console.error("Video playback failed:", err));
+    
+        const nebulaTexture = new THREE.VideoTexture(video);
+        nebulaTexture.wrapS = THREE.RepeatWrapping;
+        nebulaTexture.wrapT = THREE.RepeatWrapping;
+        nebulaTexture.minFilter = THREE.LinearFilter;
+        nebulaTexture.magFilter = THREE.LinearFilter;
+    
+        const sphereMaterial = new THREE.MeshStandardMaterial({
+            map: nebulaTexture,
+            transparent: true,
+            opacity: 0.7,
+            metalness: 0.5,
+            roughness: 0.4,
+            emissive: 0x0000ff,
+            emissiveIntensity: 1.0
         });
-        const bodyMesh = new THREE.Mesh(bodyGeometry, bodyMaterial);
-        bodyMesh.rotation.x = Math.PI / 2;
-        speedsterGroup.add(bodyMesh);
+        const sphereMesh = new THREE.Mesh(sphereGeometry, sphereMaterial);
+        speedsterGroup.add(sphereMesh);
+    
+        const glowLight = new THREE.PointLight(0x0000ff, 1, 50);
+        glowLight.position.set(0, 0, 0);
+        speedsterGroup.add(glowLight);
+    
+        speedsterGroup.userData = { material: sphereMaterial, light: glowLight, colorPhase: 0 };
     
         const t = (this.podDistance + this.enemySpawnDistance) / this.trackPath.getLength();
         const basePos = this.trackPath.getPointAt(t % 1);
@@ -401,7 +458,7 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
         console.log("Speedster spawned at:", speedsterGroup.position, "Pod at:", this.pod.position);
     
         const speedsterBody = new CANNON.Body({ mass: 1 });
-        speedsterBody.addShape(new CANNON.Box(new CANNON.Vec3(10, 10, 15)));
+        speedsterBody.addShape(new CANNON.Sphere(10));
         speedsterBody.position.copy(speedsterGroup.position);
         this.world.addBody(speedsterBody);
     
@@ -422,6 +479,50 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
         console.log("Speedster velocity:", speedsterBody.velocity, "Direction:", flybyDirection);
         speedsterGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), flybyDirection);
     
+        // Nebula particles
+        const particleCount = 30;
+        const particleGeometry = new THREE.BufferGeometry();
+        const particlePositions = new Float32Array(particleCount * 3);
+        const velocities: THREE.Vector3[] = [];
+        const lifetimes: number[] = [];
+        const nebulaColors = [0x0000ff, 0x800080, 0xff00ff, 0x00ff00]; // Blue, purple, pink, green
+    
+        for (let i = 0; i < particleCount; i++) {
+            particlePositions[i * 3] = speedsterGroup.position.x;
+            particlePositions[i * 3 + 1] = speedsterGroup.position.y;
+            particlePositions[i * 3 + 2] = speedsterGroup.position.z;
+    
+            const velocity = new THREE.Vector3(
+                (this.rng() - 0.5) * 20, // Random direction, ±10 units/sec
+                (this.rng() - 0.5) * 20,
+                (this.rng() - 0.5) * 20
+            ).normalize().multiplyScalar(5 + this.rng() * 5); // Speed 5-10 units/sec
+            velocities.push(velocity);
+            lifetimes.push(1.0 + this.rng() * 1.0); // Lifetime 1-2 seconds
+        }
+    
+        particleGeometry.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
+        const particleMaterial = new THREE.PointsMaterial({
+            size: 3,
+            transparent: true,
+            opacity: 0.8,
+            blending: THREE.AdditiveBlending,
+            vertexColors: true // Enable per-particle colors
+        });
+        const colors = new Float32Array(particleCount * 3);
+        for (let i = 0; i < particleCount; i++) {
+            const color = new THREE.Color(nebulaColors[Math.floor(this.rng() * nebulaColors.length)]);
+            colors[i * 3] = color.r;
+            colors[i * 3 + 1] = color.g;
+            colors[i * 3 + 2] = color.b;
+        }
+        particleGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    
+        const particles = new THREE.Points(particleGeometry, particleMaterial);
+        this.scene.add(particles);
+        this.speedsterParticles.push({ points: particles, velocities, lifetimes });
+    
+        // Existing trail (unchanged)
         const trailGeometry = new THREE.BufferGeometry();
         const trailCount = 20;
         const trailPositions = new Float32Array(trailCount * 3);
@@ -444,6 +545,7 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
         this.speedsterTrails.push(trail);
     
         this.weavingTimers.set(speedsterBody, 0);
+        speedsterGroup.userData = { material: sphereMaterial, light: glowLight, colorPhase: 0, hasGrantedLives: false };
         this.speedsterShips.push({ mesh: speedsterGroup, body: speedsterBody });
         this.speedsterSpawnsThisLevel++;
     
@@ -1089,7 +1191,7 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
         const enemyGroup = new THREE.Group();
         const bodyGeometry = new THREE.SphereGeometry(7, 16, 16);
         const bodyMaterial = new THREE.MeshStandardMaterial({
-            map: this.metalTexture,
+            map: this.enemyVideoTexture, // Replace this.metalTexture with video texture
             metalness: 0.8,
             roughness: 0.4
         });
@@ -1288,8 +1390,21 @@ this.scene.fog = new THREE.FogExp2(fogColor, fogDensity);
         this.moon.position.set(this.earth.position.x + this.moonOrbitRadius, this.earth.position.y, this.earth.position.z);
         this.scene.add(this.moon);
 
+        // Create Mars with video texture
         const marsGeometry = new THREE.SphereGeometry(800, 32, 32);
-        const marsMaterial = new THREE.MeshStandardMaterial({ map: textureLoader.load('/assets/textures/mars.jpg') });
+
+        // Get the video element
+        const marsVideo = document.getElementById('marsVideo') as HTMLVideoElement;
+        marsVideo.play().catch(err => console.error("Mars video playback failed:", err));
+
+        // Create VideoTexture
+        const marsVideoTexture = new THREE.VideoTexture(marsVideo);
+        marsVideoTexture.minFilter = THREE.LinearFilter; // Smooths the texture
+        marsVideoTexture.magFilter = THREE.LinearFilter;
+        marsVideoTexture.format = THREE.RGBFormat; // Adjust if needed based on video
+
+        // Apply to material
+        const marsMaterial = new THREE.MeshStandardMaterial({ map: marsVideoTexture });
         this.mars = new THREE.Mesh(marsGeometry, marsMaterial);
         this.mars.position.set(-6000, -3000, 12000);
         this.scene.add(this.mars);
@@ -1310,7 +1425,7 @@ this.scene.fog = new THREE.FogExp2(fogColor, fogDensity);
         // Add this in createScene, after the stars
 const textureLoaderMilky = new THREE.TextureLoader();
 // Load a Milky Way-style texture (you’ll need an asset, or use a placeholder)
-const milkyWayTexture = textureLoaderMilky.load('/assets/milkyway2.jpg', (texture) => {
+const milkyWayTexture = textureLoaderMilky.load('/assets/milkyway2.png', (texture) => {
     texture.wrapS = THREE.RepeatWrapping;
     texture.wrapT = THREE.RepeatWrapping;
     texture.repeat.set(1, 1);
@@ -1414,11 +1529,23 @@ this.scene.add(this.nebulaSphere);
     }
 
     private addAdditionalPlanets(): void {
-        this.additionalPlanets = []; // Clear existing planets
+        this.additionalPlanets = [];
         const textureLoader = new THREE.TextureLoader();
         const planetConfigs = [
             { color: 0x6e1101, size: 800, rings: true, rotationSpeed: 0.0006, texture: '/assets/planets/01.png' },
-            { color: 0x803e33, size: 950, stars: 3, rotationSpeed: 0.0005, texture: '/assets/planets/02.png' },
+            { 
+                color: 0x803e33, 
+                size: 950, 
+                stars: 3, 
+                rotationSpeed: 0.0005,
+                texture: '/assets/planets/02.png',
+                rotationX: Math.PI / 4, // Example: 45° on X
+                rotationY: Math.PI / 2, // Example: 90° on Y
+                rotationZ: Math.PI / 6, // Example: 30° on Z
+                rotationSpeedX: 0.0002, // Example X speed
+                rotationSpeedY: 0.0005, // Matches original Y speed
+                rotationSpeedZ: 0.0003  // Example Z speed
+            },
             { color: 0x7a6c50, size: 650, rings: false, rotationSpeed: 0.0008, texture: '/assets/planets/03.png' },
             { color: 0x141338, size: 900, rings: true, rotationSpeed: 0.0004, texture: '/assets/planets/04.png' },
             { color: 0x300952, size: 700, stars: 2, rotationSpeed: 0.0010, texture: '/assets/planets/05.png' },
@@ -1427,41 +1554,52 @@ this.scene.add(this.nebulaSphere);
     
         const trackLength = this.trackPath.getLength();
         const numPlanets = planetConfigs.length;
-        const minSeparation = trackLength / numPlanets * 0.8; // Base separation (80% of even split)
-        const baseSpreadFactor = 2; // Starting spread (2x original)
-        const additionalSpreadFactor = 5; // Additional 5x spread
-        const totalSpreadFactor = baseSpreadFactor * additionalSpreadFactor; // 10x total spread
+        const minSeparation = trackLength / numPlanets * 0.8;
+        const baseSpreadFactor = 2;
+        const additionalSpreadFactor = 5;
+        const totalSpreadFactor = baseSpreadFactor * additionalSpreadFactor;
     
-        // Generate evenly spaced base positions with randomization
         const baseTs = [];
         for (let i = 0; i < numPlanets; i++) {
-            const baseT = (i / numPlanets) + (this.rng() - 0.5) * 0.1; // Small randomization around even split
-            baseTs.push(Math.max(0.05, Math.min(0.95, baseT))); // Keep within 5%-95% of track
+            const baseT = (i / numPlanets) + (this.rng() - 0.5) * 0.1;
+            baseTs.push(Math.max(0.05, Math.min(0.95, baseT)));
         }
-        baseTs.sort((a, b) => a - b); // Ensure ascending order
+        baseTs.sort((a, b) => a - b);
     
         planetConfigs.forEach((config, index) => {
-            // Planet geometry with higher detail
-            const planetGeometry = new THREE.SphereGeometry(config.size, 64, 64); // Increased segments for smoothness
-            const planetMaterial = new THREE.MeshLambertMaterial({
-                map: textureLoader.load(config.texture),
-                color: config.color
-            });
+            const planetGeometry = new THREE.SphereGeometry(config.size, 64, 64);
+            let planetMaterial: THREE.MeshLambertMaterial;
+    
+            if (config.color === 0x803e33 && config.size === 950 && config.texture === '/assets/planets/02.png') {
+                planetMaterial = new THREE.MeshLambertMaterial({
+                    map: this.purplePlanetVideoTexture || textureLoader.load(config.texture),
+                    color: config.color
+                });
+            } else {
+                planetMaterial = new THREE.MeshLambertMaterial({
+                    map: textureLoader.load(config.texture),
+                    color: config.color
+                });
+            }
+    
             const planet = new THREE.Mesh(planetGeometry, planetMaterial);
-            
-            // Position along the track with increased spread
+    
+            // Apply initial rotations
+            planet.rotation.x = config.rotationX || 0;
+            planet.rotation.y = config.rotationY || 0;
+            planet.rotation.z = config.rotationZ || 0;
+    
             const t = baseTs[index];
             const basePos = this.trackPath.getPointAt(t);
             const tangent = this.trackPath.getTangentAt(t);
             const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
             const binormal = tangent.clone().cross(normal).normalize();
     
-            // Increased offset range (10x original with totalSpreadFactor = 10)
-            const minOffset = 1000 * totalSpreadFactor; // 10,000 units at 10x
-            const maxOffset = 3000 * totalSpreadFactor; // 30,000 units at 10x
+            const minOffset = 1000 * totalSpreadFactor;
+            const maxOffset = 3000 * totalSpreadFactor;
             const offsetX = (this.rng() - 0.5) * (maxOffset - minOffset) + minOffset;
             const offsetY = (this.rng() - 0.5) * (maxOffset - minOffset) + minOffset;
-            const offsetZ = (this.rng() - 0.5) * 500 * totalSpreadFactor; // 5000 at 10x
+            const offsetZ = (this.rng() - 0.5) * 500 * totalSpreadFactor;
     
             planet.position.copy(basePos)
                 .addScaledVector(normal, offsetX)
@@ -1469,10 +1607,8 @@ this.scene.add(this.nebulaSphere);
                 .addScaledVector(tangent, offsetZ);
             this.scene.add(planet);
     
-
-    
             let rings: THREE.Mesh | undefined;
-            let stars: THREE.Mesh | undefined;
+            let stars: THREE.Mesh[] | undefined;
     
             if (config.rings) {
                 const ringGeometry = new THREE.RingGeometry(config.size * 1.2, config.size * 1.5, 64);
@@ -1483,7 +1619,7 @@ this.scene.add(this.nebulaSphere);
                     opacity: 0.7
                 });
                 rings = new THREE.Mesh(ringGeometry, ringMaterial);
-                rings.rotation.x = Math.PI / 2 + (this.rng() - 0.5) * 0.2; // Slight tilt variation
+                rings.rotation.x = Math.PI / 2 + (this.rng() - 0.5) * 0.2;
                 rings.position.copy(planet.position);
                 this.scene.add(rings);
             }
@@ -1509,7 +1645,15 @@ this.scene.add(this.nebulaSphere);
                 }
             }
     
-            this.additionalPlanets.push({ mesh: planet, rings, stars, rotationSpeed: config.rotationSpeed });
+            this.additionalPlanets.push({ 
+                mesh: planet, 
+                rings, 
+                stars, 
+                rotationSpeed: config.rotationSpeed,
+                rotationSpeedX: config.rotationSpeedX || 0,
+                rotationSpeedY: config.rotationSpeedY || config.rotationSpeed,
+                rotationSpeedZ: config.rotationSpeedZ || 0
+            });
         });
     }
 
@@ -1781,6 +1925,8 @@ this.scene.add(this.nebulaSphere);
 
             this.speedsterShips = [];
             this.speedsterTrails = [];
+            this.speedsterParticles.forEach(p => this.scene.remove(p.points));
+            this.speedsterParticles = [];
             this.weavingTimers.clear();
             this.fastShotRounds = 0;
             this.fireRate = this.baseFireRate; // Reset fire rate
@@ -1884,11 +2030,14 @@ this.scene.add(this.nebulaSphere);
         this.moon.rotation.y += 0.0003;
     
         this.additionalPlanets.forEach(planet => {
-            planet.mesh.rotation.y += planet.rotationSpeed;
-            if (planet.rings) planet.rings.rotation.z += planet.rotationSpeed * 0.5;
+            planet.mesh.rotation.x += planet.rotationSpeedX || 0;
+            planet.mesh.rotation.y += planet.rotationSpeedY || planet.rotationSpeed;
+            planet.mesh.rotation.z += planet.rotationSpeedZ || 0;
+        
+            if (planet.rings) planet.rings.rotation.z += (planet.rotationSpeedY || planet.rotationSpeed) * 0.5;
             if (planet.stars) {
                 planet.stars.forEach((star, index) => {
-                    const angle = this.survivalTime * planet.rotationSpeed + (index / planet.stars!.length) * 2 * Math.PI;
+                    const angle = this.survivalTime * (planet.rotationSpeedY || planet.rotationSpeed) + (index / planet.stars!.length) * 2 * Math.PI;
                     const radius = planet.mesh.geometry.parameters.radius * 2;
                     star.position.set(
                         planet.mesh.position.x + Math.cos(angle) * radius,
@@ -2209,41 +2358,45 @@ this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
         for (let i = this.speedsterShips.length - 1; i >= 0; i--) {
             const speedster = this.speedsterShips[i];
             
-            console.log("Speedster body position before update:", speedster.body.position);
-            console.log("Speedster velocity before update:", speedster.body.velocity);
-        
             speedster.mesh.position.copy(speedster.body.position);
         
             // Weaving motion
             const weavingTimer = this.weavingTimers.get(speedster.body) || 0;
             const weaveOffset = Math.sin(weavingTimer * 5) * 20;
-        
-            // Convert CANNON.Vec3 to THREE.Vector3 explicitly
             const tangent = new THREE.Vector3(
                 speedster.body.velocity.x,
                 speedster.body.velocity.y,
                 speedster.body.velocity.z
             ).normalize();
         
-            // Check for zero vector to prevent NaN
             if (tangent.lengthSq() === 0) {
-                tangent.set(0, 0, -1); // Fallback towards pod
+                tangent.set(0, 0, -1);
             }
         
             const normal = new THREE.Vector3(0, 1, 0).cross(tangent);
             if (isNaN(normal.x) || isNaN(normal.y) || isNaN(normal.z)) {
-                normal.set(1, 0, 0); // Fallback
+                normal.set(1, 0, 0);
             } else {
                 normal.normalize();
             }
             const weaveVector = normal.clone().multiplyScalar(weaveOffset * 0.01667);
             speedster.body.position.vadd(weaveVector as any, speedster.body.position);
         
-            console.log("Speedster body position after weaving:", speedster.body.position);
-        
             this.weavingTimers.set(speedster.body, weavingTimer + 0.01667);
         
-            // Convert velocity to THREE.Vector3 for flyby direction
+            // Animate rotation and glow
+            const time = performance.now() * 0.001;
+            const pulse = Math.sin(time * 2) * 0.5 + 0.5;
+        
+            speedster.mesh.children[0].rotation.x += 0.01;
+            speedster.mesh.children[0].rotation.y += 0.015;
+            speedster.mesh.children[0].rotation.z += 0.005;
+        
+            const baseColor = new THREE.Color(0x0000ff);
+            speedster.mesh.userData.material.emissive.copy(baseColor).multiplyScalar(pulse + 0.5);
+            speedster.mesh.userData.light.color.copy(baseColor);
+            speedster.mesh.userData.light.intensity = 1 + pulse;
+        
             const flybyDirection = new THREE.Vector3(
                 speedster.body.velocity.x,
                 speedster.body.velocity.y,
@@ -2251,22 +2404,25 @@ this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
             ).normalize();
         
             if (isNaN(flybyDirection.x) || isNaN(flybyDirection.y) || isNaN(flybyDirection.z)) {
-                flybyDirection.set(0, 0, -1); // Fallback
+                flybyDirection.set(0, 0, -1);
             }
             speedster.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), flybyDirection);
         
             for (let j = this.bullets.length - 1; j >= 0; j--) {
                 const bullet = this.bullets[j];
                 if (bullet.mesh.position.distanceTo(speedster.mesh.position) < 15) {
-                    this.fastShotRounds = 100;
+                    this.fastShotRounds = 100; // Always grant fast shots
                     this.fireRate = this.baseFireRate / 3;
-                    this.lives += 10;
-        
+                    if (!speedster.mesh.userData.hasGrantedLives) { // Check if lives haven’t been granted
+                        this.lives += 10; // Line to change: now conditional
+                        speedster.mesh.userData.hasGrantedLives = true; // Mark as rewarded
+                    }
+                
                     const escapeSpeed = this.enemyBaseSpeed * 6;
                     const escapeDirection = new THREE.Vector3();
                     speedster.body.position.vsub(this.pod.position, escapeDirection as any);
                     if (isNaN(escapeDirection.x) || isNaN(escapeDirection.y) || isNaN(escapeDirection.z)) {
-                        escapeDirection.set(0, 0, 1); // Fallback away from pod
+                        escapeDirection.set(0, 0, 1);
                     } else {
                         escapeDirection.normalize();
                     }
@@ -2275,7 +2431,7 @@ this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
                         escapeDirection.y * escapeSpeed,
                         escapeDirection.z * escapeSpeed
                     );
-        
+                
                     this.scene.remove(bullet.mesh);
                     this.world.removeBody(bullet.body);
                     this.bullets.splice(j, 1);
@@ -2285,7 +2441,7 @@ this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
         
             const distanceToPod = speedster.mesh.position.distanceTo(this.pod.position);
             const zDistance = speedster.mesh.position.z - this.pod.position.z;
-            if (isNaN(distanceToPod) || distanceToPod > 15000 || zDistance < -2000) {
+            if (isNaN(distanceToPod) || distanceToPod > 1200 || zDistance < -1200) {
                 console.log("Speedster removed:", speedster.mesh.position, "Distance:", distanceToPod, "Z Distance:", zDistance);
                 this.scene.remove(speedster.mesh);
                 this.world.removeBody(speedster.body);
@@ -2293,6 +2449,58 @@ this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
                 this.speedsterShips.splice(i, 1);
             } else {
                 console.log("Speedster alive at:", speedster.mesh.position, "Distance:", distanceToPod, "Z:", zDistance);
+            }
+        }
+        
+        // Update speedster particles (after speedsterShips loop)
+        for (let i = this.speedsterParticles.length - 1; i >= 0; i--) {
+            const particleSystem = this.speedsterParticles[i];
+            const positions = particleSystem.points.geometry.attributes.position.array as Float32Array;
+            const velocities = particleSystem.velocities;
+            const lifetimes = particleSystem.lifetimes;
+            let allExpired = true;
+        
+            for (let j = 0; j < positions.length; j += 3) {
+                if (lifetimes[j / 3] > 0) {
+                    positions[j] += velocities[j / 3].x * 0.01667; // Delta time
+                    positions[j + 1] += velocities[j / 3].y * 0.01667;
+                    positions[j + 2] += velocities[j / 3].z * 0.01667;
+                    lifetimes[j / 3] -= 0.01667;
+                    allExpired = false;
+                } else if (lifetimes[j / 3] <= 0 && lifetimes[j / 3] > -1) {
+                    // Respawn particle at speedster position
+                    const nearestSpeedster = this.speedsterShips.reduce((closest, s) => {
+                        const dist = s.mesh.position.distanceTo(new THREE.Vector3(positions[j], positions[j + 1], positions[j + 2]));
+                        return dist < closest.dist ? { mesh: s.mesh, dist } : closest;
+                    }, { mesh: null as THREE.Group | null, dist: Infinity }).mesh;
+                    if (nearestSpeedster) {
+                        positions[j] = nearestSpeedster.position.x;
+                        positions[j + 1] = nearestSpeedster.position.y;
+                        positions[j + 2] = nearestSpeedster.position.z;
+                        velocities[j / 3].set(
+                            (this.rng() - 0.5) * 20,
+                            (this.rng() - 0.5) * 20,
+                            (this.rng() - 0.5) * 20
+                        ).normalize().multiplyScalar(5 + this.rng() * 5);
+                        lifetimes[j / 3] = 1.0 + this.rng() * 1.0;
+                        const color = new THREE.Color(this.nebulaColors[Math.floor(this.rng() * this.nebulaColors.length)]);
+                        const colors = particleSystem.points.geometry.attributes.color.array as Float32Array;
+                        colors[j] = color.r;
+                        colors[j + 1] = color.g;
+                        colors[j + 2] = color.b;
+                        particleSystem.points.geometry.attributes.color.needsUpdate = true;
+                    }
+                }
+            }
+        
+            particleSystem.points.geometry.attributes.position.needsUpdate = true;
+            particleSystem.points.material.opacity = Math.max(0, lifetimes[0] / 2.0);
+        
+            if (allExpired) {
+                this.scene.remove(particleSystem.points);
+                this.speedsterParticles.splice(i, 1);
+            } else {
+                particleSystem.points.geometry.computeBoundingSphere();
             }
         }
 
