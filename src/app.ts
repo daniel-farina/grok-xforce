@@ -73,9 +73,6 @@ class PodRacingGame {
     private currentSongIndex: number = 0;
     
     private explosionSound!: HTMLAudioElement;
-    private niceShotSound!: HTMLAudioElement; // New audio for kills
-    private holdTightSound!: HTMLAudioElement; // New audio for enemy spawns
-    private enemySpottedSound!: HTMLAudioElement; // New audio for enemy spawns
     private audioContext!: AudioContext;
     private mouseSensitivity: number = 0.002;
     private yaw: number = 0;
@@ -90,6 +87,8 @@ class PodRacingGame {
     private enemySpawnsThisLevel: number = 0;
     private asteroidModel: THREE.Group | null = null;
     private introAudio!: HTMLAudioElement;
+    private introAudioGain!: GainNode; // Gain node for intro audio
+    private introAudioVolume: number = 0.1; // Default volume (0.0 to 1.0)
     private isIntroPlaying: boolean = true;
     private introTime: number = 0;
     private introDuration: number = 20;
@@ -150,6 +149,15 @@ private minBurstDelay: number = 0.5; // Min delay between bursts
 private maxBurstDelay: number = 2.0; // Max delay between bursts
 private startPrompt!: HTMLElement;
 
+private nebulaSphere!: THREE.Mesh; // For Option 1
+private nebulaParticles!: THREE.Points; // For Option 2
+
+private countdownMain!: HTMLElement; // Main countdown text
+private countdownSub!: HTMLElement;   // Subtext for instructions
+
+private shotSounds: HTMLAudioElement[] = []; // For hitting enemies
+private watchoutSounds: HTMLAudioElement[] = []; // For enemy spawns
+
     constructor() {
         this.initialize().then(() => {
             console.log("Game initialized");
@@ -191,8 +199,8 @@ private startPrompt!: HTMLElement;
    // Song randomization
    this.songs = [
     new Audio('/assets/music1.mp3'),
-    new Audio('/assets/music2.mp3'),
-    new Audio('/assets/music3.mp3')
+    // new Audio('/assets/music2.mp3'),
+    // new Audio('/assets/music3.mp3')
 ];
 this.backgroundMusicGain = this.audioContext.createGain();
 this.backgroundMusicGain.gain.setValueAtTime(this.backgroundMusicVolume, this.audioContext.currentTime);
@@ -221,10 +229,43 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
     
     
         this.explosionSound = new Audio('/assets/explosion.mp3');
-        this.niceShotSound = new Audio('/assets/audio/nice_shot.mp3');
-        this.holdTightSound = new Audio('/assets/audio/hold_tight.mp3');
-        this.enemySpottedSound = new Audio('/assets/audio/enemy_spotted.mp3');
-        this.introAudio = new Audio('/assets/intro-pilot.mp3');
+    this.introAudio = new Audio('/assets/intro.mp3');
+    const introSource = this.audioContext.createMediaElementSource(this.introAudio);
+    this.introAudioGain = this.audioContext.createGain();
+    this.introAudioGain.gain.setValueAtTime(this.introAudioVolume, this.audioContext.currentTime);
+    introSource.connect(this.introAudioGain);
+    this.introAudioGain.connect(this.audioContext.destination);
+
+
+     // Load shot sounds for hitting enemies
+     this.shotSounds = [
+        new Audio('/assets/audio/shot/another_hit.mp3'),
+        new Audio('/assets/audio/shot/direc_hit.mp3'),
+        new Audio('/assets/audio/shot/dont_let_up.mp3'),
+        new Audio('/assets/audio/shot/great_shot.mp3'),
+        new Audio('/assets/audio/shot/keep_firing.mp3'),
+        new Audio('/assets/audio/shot/watch_those_Asteroids.mp3'),
+        new Audio('/assets/audio/shot/we_got_more_incoming.mp3'),
+        new Audio('/assets/audio/shot/you_doing_great.mp3')
+    ];
+    this.shotSounds.forEach(sound => sound.volume = 0.5);
+
+    // Load watchout sounds for enemy spawns
+    this.watchoutSounds = [
+        new Audio('/assets/audio/watchout/fire_at_will.mp3'),
+        new Audio('/assets/audio/watchout/keep_nose_up.mp3'),
+        new Audio('/assets/audio/watchout/keep_us_moving.mp3'),
+        new Audio('/assets/audio/watchout/look_out_enemy_12_oclock.mp3'),
+        new Audio('/assets/audio/watchout/stay_focus.mp3'),
+        new Audio('/assets/audio/watchout/stay_sharp_they_are_closing_in.mp3'),
+        new Audio('/assets/audio/watchout/they_are_not_make_easy.mp3'),
+        new Audio('/assets/audio/watchout/watch_for_those_asteroids.mp3'),
+        new Audio('/assets/audio/watchout/we_cant_stay_Still.mp3'),
+        new Audio('/assets/audio/watchout/we_got_to_take_them_down.mp3')
+    ];
+    this.watchoutSounds.forEach(sound => sound.volume = 0.5);
+
+
         this.alertSounds = [];
         this.audioContext = new AudioContext();
     
@@ -237,18 +278,26 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
         this.startButton.style.display = "none";
         this.difficultyMenu.style.display = "block";
         this.startPrompt.style.display = "none"; // Hide initially
-        const controlsElement = document.getElementById("controls") as HTMLElement;
-        controlsElement.style.display = this.showDebugControls ? "block" : "none";
+        
         const textureLoader = new THREE.TextureLoader();
-        this.asteroidTexture = await textureLoader.loadAsync('/assets/asteroid.jpg').catch(() => null);
+        this.asteroidTexture = await textureLoader.loadAsync('/assets/asteroid.jpg')
+        .then(texture => {
+            console.log("Asteroid texture loaded successfully");
+            return texture;
+        })
+        .catch(err => {
+            console.error("Failed to load asteroid texture:", err);
+            return null;
+        });
         this.metalTexture = await textureLoader.loadAsync('/assets/metal.png').catch(() => null);
     }
-
     private assignDomElements(): void {
         this.livesCounter = document.getElementById("healthCounter") as HTMLElement;
         this.scoreCounter = document.getElementById("scoreCounter") as HTMLElement;
         this.enemiesKilledCounter = document.getElementById("enemiesKilledCounter") as HTMLElement;
         this.countdownElement = document.getElementById("countdown") as HTMLElement;
+        this.countdownMain = document.getElementById("countdownMain") as HTMLElement;
+        this.countdownSub = document.getElementById("countdownSub") as HTMLElement;
         this.hud = document.getElementById("hud") as HTMLElement;
         this.pauseMenu = document.getElementById("pauseMenu") as HTMLElement;
         this.gameOverMenu = document.getElementById("gameOverMenu") as HTMLElement;
@@ -257,9 +306,23 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
         this.crosshair = document.getElementById("crosshair") as HTMLElement;
         this.startButton = document.getElementById("startButton") as HTMLElement;
         this.difficultyMenu = document.getElementById("difficultyMenu") as HTMLElement;
-        this.startPrompt = document.getElementById("startPrompt") as HTMLElement; // Add this
-        // No need to append or set styles—Tailwind handles it
-        this.updateHUD(); // Safe to call with the guard in place
+        this.startPrompt = document.getElementById("startPrompt") as HTMLElement; // Add this line
+    
+        // Add controls element
+        const controlsElement = document.getElementById("controls") as HTMLElement;
+        if (controlsElement) {
+            controlsElement.style.display = this.showDebugControls ? "block" : "none";
+        } else {
+            console.error("Controls element not found");
+        }
+    
+        // Error checking
+        if (!this.countdownElement) console.error("countdown element not found");
+        if (!this.countdownMain) console.error("countdownMain element not found");
+        if (!this.countdownSub) console.error("countdownSub element not found");
+        if (!this.startPrompt) console.error("startPrompt element not found"); // Add this for debugging
+    
+        this.updateHUD();
     }
 
     private setupDifficultyButtons(): void {
@@ -417,8 +480,12 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
             if (this.isPaused || !this.raceStarted || document.pointerLockElement !== this.canvas) return;
             const yawDelta = -event.movementX * this.mouseSensitivity;
             const pitchDelta = -event.movementY * this.mouseSensitivity;
-            this.yaw = Math.max(-Math.PI / 4, Math.min(Math.PI / 4, this.yaw + yawDelta));
-            this.pitch = Math.max(-Math.PI / 6, Math.min(Math.PI / 6, this.pitch + pitchDelta));
+            // Remove clamps for full 360-degree freedom
+            this.yaw += yawDelta;
+            this.pitch += pitchDelta;
+            // Optional: Normalize yaw to keep it within [-2π, 2π] for clarity, though not necessary
+            this.yaw = this.yaw % (2 * Math.PI);
+            this.pitch = this.pitch % (2 * Math.PI);
         });
     
         this.startButton.addEventListener("click", () => {
@@ -427,10 +494,10 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
         });
     
         this.canvas.addEventListener("click", () => {
-            if (!this.isPaused && !this.isIntroPlaying && !this.raceStarted && this.startPrompt.style.display === "block") {
-                this.startPrompt.style.display = "none";
+            if (!this.isPaused && !this.isIntroPlaying && !this.raceStarted) {
                 this.raceStarted = true;
                 this.canvas.requestPointerLock(); // Lock pointer on click
+                this.countdownElement.style.display = "none"; // Hide countdown on click
             }
             if (this.audioContext.state === 'suspended') {
                 this.audioContext.resume();
@@ -758,6 +825,8 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
         }
     
         geometry.computeVertexNormals();
+
+        
     
         const material = new THREE.MeshStandardMaterial({
             color: 0x333333,
@@ -818,7 +887,7 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
         });
         const bodyMesh = new THREE.Mesh(bodyGeometry, bodyMaterial);
         enemyGroup.add(bodyMesh);
-
+    
         const windowGeometry = new THREE.SphereGeometry(4.2, 16, 16);
         const windowMaterial = new THREE.MeshStandardMaterial({
             color: 0xd3d3d3,
@@ -829,7 +898,7 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
         windowMesh.scale.z = 0.2;
         windowMesh.position.set(0, 0, -7);
         enemyGroup.add(windowMesh);
-
+    
         const t = (this.podDistance + this.enemySpawnDistance) / this.trackPath.getLength() % 1;
         const basePos = this.trackPath.getPointAt(t);
         const tangent = this.trackPath.getTangentAt(t);
@@ -838,27 +907,33 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
         enemyGroup.position.copy(basePos)
             .addScaledVector(normal, (this.rng() - 0.5) * this.enemyLateralOffset)
             .addScaledVector(binormal, (this.rng() - 0.5) * this.enemyLateralOffset);
-            enemyGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), tangent); // Changed from tangent.negate()
+        enemyGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), tangent);
         this.scene.add(enemyGroup);
-
+    
         const enemyBody = new CANNON.Body({ mass: 1 });
         enemyBody.addShape(new CANNON.Sphere(7));
         enemyBody.position.copy(enemyGroup.position);
         this.world.addBody(enemyBody);
-
+    
         this.enemyShips.push({ mesh: enemyGroup, body: enemyBody });
         this.enemyShotCounts.set(enemyBody, 0);
         this.enemyHits.set(enemyBody, 0);
         this.enemySpawnsThisLevel++;
-
-            // Initialize burst state with random start delay
-        const initialDelay = this.rng() * this.maxBurstDelay; // Random start time (0 to 2s)
+    
+        // Initialize burst state
+        const initialDelay = this.rng() * this.maxBurstDelay;
         this.enemyBurstStates.set(enemyBody, {
             isBursting: false,
             burstCount: 0,
-            burstDelay: initialDelay, // Starts with a random delay
-            lastBurstTime: performance.now() / 1000 - initialDelay // Offset for staggered starts
+            burstDelay: initialDelay,
+            lastBurstTime: performance.now() / 1000 - initialDelay
         });
+    
+        // Play random watchout sound every 15 spawns
+        if (this.enemySpawnsThisLevel % 15 === 0) {
+            const randomWatchoutSound = this.watchoutSounds[Math.floor(this.rng() * this.watchoutSounds.length)];
+            (randomWatchoutSound.cloneNode(true) as HTMLAudioElement).play().catch(err => console.error("Watchout audio playback failed:", err));
+        }
     }
 
     private async createScene(): Promise<void> {
@@ -1002,6 +1077,42 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
         directionalLight.castShadow = true;
         this.scene.add(directionalLight);
 
+
+        // Add this in createScene, after the stars
+const textureLoaderMilky = new THREE.TextureLoader();
+// Load a Milky Way-style texture (you’ll need an asset, or use a placeholder)
+const milkyWayTexture = textureLoaderMilky.load('/assets/milkyway2.jpg', (texture) => {
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(1, 1);
+}, undefined, (err) => {
+    console.error('Failed to load Milky Way texture:', err);
+    // Fallback: generate a simple gradient
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 1024;
+    const ctx = canvas.getContext('2d')!;
+    const gradient = ctx.createRadialGradient(512, 512, 0, 512, 512, 512);
+    gradient.addColorStop(0, 'rgba(50, 50, 100, 0.8)');
+    gradient.addColorStop(0.5, 'rgba(100, 50, 150, 0.4)');
+    gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 1024, 1024);
+    return new THREE.CanvasTexture(canvas);
+});
+
+const nebulaGeometry = new THREE.SphereGeometry(15000, 64, 64); // Large enough to surround the scene
+const nebulaMaterial = new THREE.MeshBasicMaterial({
+    map: milkyWayTexture,
+    side: THREE.BackSide, // Render inside the sphere
+    transparent: true,
+    opacity: 0.8,
+    depthWrite: false // Prevent z-fighting with other objects
+});
+this.nebulaSphere = new THREE.Mesh(nebulaGeometry, nebulaMaterial);
+this.nebulaSphere.position.set(0, 0, 0); // Center of the galaxy
+this.scene.add(this.nebulaSphere);
+
         const sunLight = new THREE.DirectionalLight(0xffffff, 8);
         sunLight.position.set(10000, 10000, 10000);
         sunLight.castShadow = true;
@@ -1066,6 +1177,10 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
 
         // Adjust pod speed for current level
         this.podSpeed = this.basePodSpeed * (1 + (this.level - 1) * 0.01); // 1% increase per level
+   
+   
+   
+   
     }
 
     private addAdditionalPlanets(): void {
@@ -1257,14 +1372,14 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
     
         if (this.isIntroPlaying) {
             this.introTime += deltaTime;
-            const startAngle = Math.PI; // 180 degrees
-            const angle = startAngle + (this.introTime / this.introDuration) * (2 * Math.PI / 3); // 3x slower: 120° over 20s
+            const startAngle = Math.PI;
+            const angle = startAngle + (this.introTime / this.introDuration) * (2 * Math.PI / 6);
             const radius = 20;
             const podPos = this.pod.position;
         
             this.camera.position.set(
                 podPos.x + radius * Math.cos(angle),
-                podPos.y + 5,
+                podPos.y + 80,
                 podPos.z + radius * Math.sin(angle)
             );
             this.camera.lookAt(podPos);
@@ -1276,30 +1391,46 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
                 this.introTime = 0;
                 this.countdownTimer = 0;
                 this.countdownElement.style.display = "block";
+        
+                // Snap to adjusted first-person POV
+                const t = this.podDistance / this.trackPath.getLength();
+                const tangent = this.trackPath.getTangentAt(t);
+                const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
+                const up = new THREE.Vector3(0, 1, 0);
+                this.camera.position.copy(this.pod.position)
+                    .addScaledVector(tangent, -1)   // 1 unit behind
+                    .addScaledVector(up, 2)         // 2 units above
+                    .addScaledVector(normal, 1);    // 1 unit right
+                this.camera.quaternion.copy(this.pod.quaternion); // Match pod orientation instantly
             }
             return;
         }
-    
+
         if (!this.raceStarted) {
-            if (this.introTime < 1) {
-                this.introTime += deltaTime * 2;
-                const t = this.podDistance / this.trackPath.getLength();
-                const tangent = this.trackPath.getTangentAt(t);
-                const targetPos = this.pod.position.clone().addScaledVector(tangent, -2);
-                const startPos = this.camera.position.clone();
-    
-                this.camera.position.lerpVectors(startPos, targetPos, this.introTime);
-                this.camera.lookAt(this.pod.position);
-            }
-    
             this.countdownTimer += deltaTime;
             const timeLeft = Math.max(0, this.countdown - this.countdownTimer);
-            this.countdownElement.textContent = timeLeft > 0 ? `${Math.ceil(timeLeft)}` : `Level ${this.level} - Go!`;
+            let mainText = "";
+            if (timeLeft > 1) {
+                mainText = `${Math.ceil(timeLeft - 1)}`;
+                if (this.countdownSub) this.countdownSub.style.display = "none";
+            } else if (timeLeft > 0) {
+                mainText = "Click to Start";
+                if (this.countdownSub) {
+                    this.countdownSub.textContent = "Use Spacebar to shoot, mouse to aim";
+                    this.countdownSub.style.display = "block";
+                }
+            } else {
+                mainText = `Level ${this.level} - Go!`;
+                if (this.countdownSub) this.countdownSub.style.display = "none";
+                this.raceStarted = true;
+                this.canvas.requestPointerLock();
+            }
+            if (this.countdownMain) this.countdownMain.textContent = mainText;
+            if (this.countdownElement) this.countdownElement.style.display = "block";
             this.renderer.render(this.scene, this.camera);
-    
-            if (timeLeft <= 0) {
+        
+            if (timeLeft <= 0 && this.countdownElement) {
                 this.countdownElement.style.display = "none";
-                this.startPrompt.style.display = "block"; // Show "Click to Start" instead of locking pointer
             }
             return;
         }
@@ -1568,11 +1699,7 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
             for (let i = 0; i < enemyCount; i++) {
                 if (this.rng() < 0.5) {
                     this.spawnEnemyShip();
-                    // Randomly play hold_tight or enemy_spotted every 20-30 enemies
-                    if (this.enemySpawnsThisLevel % (20 + Math.floor(this.rng() * 11)) === 0) {
-                        const sound = this.rng() < 0.5 ? this.holdTightSound : this.enemySpottedSound;
-                        sound.play().catch(err => console.error("Audio playback failed:", err));
-                    }
+
                 }
             }
             this.enemySpawnTimer = 0;
@@ -1683,9 +1810,11 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
                     this.bullets.splice(j, 1);
                     this.score += 100;
                     this.enemiesKilled += 1;
-                    // Play nice_shot.mp3 every 10-15 kills
-                    if (this.enemiesKilled % (10 + Math.floor(this.rng() * 6)) === 0) {
-                        this.niceShotSound.play().catch(err => console.error("Audio playback failed:", err));
+
+                    // Play random shot sound every 15 kills
+                    if (this.enemiesKilled % 10 === 0) {
+                        const randomShotSound = this.shotSounds[Math.floor(this.rng() * this.shotSounds.length)];
+                        (randomShotSound.cloneNode(true) as HTMLAudioElement).play().catch(err => console.error("Shot audio playback failed:", err));
                     }
                     break;
                 }
