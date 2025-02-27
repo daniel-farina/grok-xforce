@@ -7,14 +7,16 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
     <style>
-        body, html { 
-            margin: 0; 
-            padding: 0; 
-            overflow: hidden; 
-            width: 100%; 
-            height: 100%; 
-            background: #0a0f1f; 
-        }
+body, html { 
+    margin: 0; 
+    padding: 0; 
+    overflow: hidden; 
+    width: 100%; 
+    height: 100%; 
+    background: url('/assets/xforce_splash.jpg') no-repeat center center fixed; 
+    background-size: cover;
+}
+
         canvas { 
             width: 100% !important; 
             height: 100% !important; 
@@ -65,12 +67,60 @@
             background: #ff5555; 
             transform: translate(-50%, -50%); 
         }
+        #compass {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 100px;
+    height: 100px;
+    text-align: center;
+}
+
+.direction {
+    position: absolute;
+    font-size: 20px;
+    font-weight: bold;
+    color: #00ffff; /* Neon cyan for sci-fi vibe */
+    text-shadow: 0 0 5px #00ffff;
+}
+
+#compassN { top: 0; left: 50%; transform: translateX(-50%); }
+#compassE { right: 0; top: 50%; transform: translateY(-50%); }
+#compassS { bottom: 0; left: 50%; transform: translateX(-50%); }
+#compassW { left: 0; top: 50%; transform: translateY(-50%); }
+
+.bullet-indicators {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none; /* Prevents blocking clicks */
+}
+
+.bullet-indicator {
+    width: 0;
+    height: 0;
+    border-left: 10px solid transparent;
+    border-right: 10px solid transparent;
+    border-bottom: 20px solid #ff0000; /* Red arrow */
+    opacity: 0.8;
+}
     </style>
 </head>
 <body>
-    <div id="startPrompt" class="hidden fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-3xl text-cyan-400 font-bold font-orbitron drop-shadow-[0_0_15px_#00ffff] z-10">Click to Start</div>
+    <div id="startPrompt">Press Start to Begin</div>
     <canvas id="renderCanvas"></canvas>
+    
     <div id="hud" class="fixed top-0 left-0 w-full flex justify-between items-start p-4 font-orbitron text-cyan-400 pointer-events-none z-10">
+        <div id="bulletIndicators" class="bullet-indicators"></div>
+        <div id="compass" class="compass">
+            <span id="compassN" class="direction">N</span>
+            <span id="compassE" class="direction">E</span>
+            <span id="compassS" class="direction">S</span>
+            <span id="compassW" class="direction">W</span>
+        </div>
         <div class="flex gap-4">
             <div id="healthCounter" class="hud-item bg-black/70 border border-cyan-400 rounded p-2 shadow-inner shadow-cyan-500/30 text-shadow-md">
                 <span class="label uppercase font-bold text-sm">Shields</span>
@@ -92,7 +142,10 @@
             <span class="value text-base mt-1">0%</span>
         </div>
     </div>
-    <div id="countdown" class="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-5xl text-cyan-400 font-bold font-orbitron drop-shadow-[0_0_15px_#00ffff] z-10"></div>
+    <div id="countdown" class="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-center font-orbitron text-cyan-400 drop-shadow-[0_0_15px_#00ffff] z-10">
+        <div id="countdownMain" class="text-5xl font-bold"></div>
+        <div id="countdownSub" class="text-lg mt-2 hidden"></div>
+    </div>
     <div id="pauseMenu" class="hidden fixed bottom-5 right-5 bg-[#0a0f1f]/90 border-2 border-cyan-400 rounded-lg p-5 text-cyan-400 text-center shadow-[0_0_15px_rgba(0,255,255,0.5)] z-20 font-orbitron">
         <h2 class="text-xl font-bold">Paused</h2>
         <button id="resumeButton" class="mt-2 px-6 py-2 bg-cyan-400 text-[#0a0f1f] rounded hover:bg-cyan-500 shadow-[0_0_5px_#00ffff]">Resume</button>
