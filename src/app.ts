@@ -464,6 +464,14 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
                         this.pod.visible = this.makePodVisible;
                     }
                     break;
+                    case 82: // 'R'
+                    if (this.lives > 0) {
+                        this.yaw = 0;
+                        this.pitch = 0;
+                    } else {
+                        this.restartGame();
+                    }
+                    break;
             }
         });
     
@@ -480,12 +488,10 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
             if (this.isPaused || !this.raceStarted || document.pointerLockElement !== this.canvas) return;
             const yawDelta = -event.movementX * this.mouseSensitivity;
             const pitchDelta = -event.movementY * this.mouseSensitivity;
-            // Remove clamps for full 360-degree freedom
+            // Full 360-degree yaw (no clamping)
             this.yaw += yawDelta;
-            this.pitch += pitchDelta;
-            // Optional: Normalize yaw to keep it within [-2π, 2π] for clarity, though not necessary
-            this.yaw = this.yaw % (2 * Math.PI);
-            this.pitch = this.pitch % (2 * Math.PI);
+            // Clamp pitch to ±45 degrees (π/4 radians), adjust as needed
+            this.pitch = Math.max(-Math.PI / 4, Math.min(Math.PI / 4, this.pitch + pitchDelta));
         });
     
         this.startButton.addEventListener("click", () => {
@@ -846,27 +852,26 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
         const currentTime = performance.now();
         if (currentTime - this.lastShotTime < this.fireRate) return;
         this.lastShotTime = currentTime;
-
-        // Clone the laser sound to allow overlapping plays
+    
         const laserClone = this.laserSound.cloneNode(true) as HTMLAudioElement;
-        laserClone.volume = 0.5; // Adjust volume as needed (0.0 to 1.0)
+        laserClone.volume = 0.5;
         laserClone.play().catch(err => console.error("Laser sound playback failed:", err));
-
+    
         const bulletGeometry = new THREE.SphereGeometry(1, 16, 16);
         const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00, emissive: 0xffff00, emissiveIntensity: 3 });
         const bulletMesh = new THREE.Mesh(bulletGeometry, bulletMaterial);
-
-        const spawnOffset = new THREE.Vector3(0, 0, -3).applyQuaternion(this.pod.quaternion);
+    
+        const spawnOffset = new THREE.Vector3(0, 0, -3).applyQuaternion(this.camera.quaternion);
         bulletMesh.position.copy(this.pod.position).add(spawnOffset);
         this.scene.add(bulletMesh);
-
+    
         const bulletBody = new CANNON.Body({ mass: 1 });
         bulletBody.addShape(new CANNON.Sphere(1));
         bulletBody.position.copy(bulletMesh.position);
-        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.pod.quaternion).normalize();
+        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion).normalize();
         bulletBody.velocity.set(forward.x * 1000, forward.y * 1000, forward.z * 1000);
         this.world.addBody(bulletBody);
-
+    
         this.bullets.push({ mesh: bulletMesh, body: bulletBody });
     }
 
@@ -1544,8 +1549,18 @@ this.scene.add(this.nebulaSphere);
     
         switch (this.cameraMode) {
             case 0:
-                this.camera.position.copy(this.pod.position).addScaledVector(tangent, -2);
-                this.camera.quaternion.copy(this.pod.quaternion);
+                // Position camera relative to pod (e.g., slightly behind and above)
+                const tangent = this.trackPath.getTangentAt(t);
+                this.camera.position.copy(this.pod.position).addScaledVector(tangent, -2); // Adjust offset as needed
+        
+                // Apply pod's base orientation (aligned with track)
+                const baseQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), tangent);
+                this.camera.quaternion.copy(baseQuat);
+        
+                // Add full 360-degree yaw and clamped pitch from mouse input
+                const yawQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
+                const pitchQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), this.pitch);
+                this.camera.quaternion.multiply(yawQuat).multiply(pitchQuat);
                 break;
             case 1:
                 this.camera.position.copy(this.pod.position).addScaledVector(tangent.negate(), 15).addScaledVector(normal, 5);
