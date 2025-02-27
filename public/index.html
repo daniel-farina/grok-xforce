@@ -7,15 +7,15 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
     <style>
-body, html { 
-    margin: 0; 
-    padding: 0; 
-    overflow: hidden; 
-    width: 100%; 
-    height: 100%; 
-    background: url('/assets/xforce_splash.jpg') no-repeat center center fixed; 
-    background-size: cover;
-}
+        body, html { 
+            margin: 0; 
+            padding: 0; 
+            overflow: hidden; 
+            width: 100%; 
+            height: 100%; 
+            background: url('/assets/xforce_splash.jpg') no-repeat center center fixed; 
+            background-size: cover;
+        }
 
         canvas { 
             width: 100% !important; 
@@ -23,6 +23,7 @@ body, html {
             display: block; 
             cursor: none; 
         }
+
         .bar::before { 
             content: ''; 
             position: absolute; 
@@ -31,9 +32,12 @@ body, html {
             background: inherit; 
             transition: width 0.2s ease; 
         }
+
         .progress-bar::before { 
             background: #00ff00; 
+            width: var(--bar-width); /* Already correct in your CSS */
         }
+
         #crosshair { 
             position: fixed; 
             top: 50%; 
@@ -47,6 +51,7 @@ body, html {
             z-index: 15; 
             box-shadow: 0 0 5px #ff5555; 
         }
+
         #crosshair::before { 
             content: ''; 
             position: absolute; 
@@ -57,6 +62,7 @@ body, html {
             background: #ff5555; 
             transform: translate(-50%, -50%); 
         }
+
         #crosshair::after { 
             content: ''; 
             position: absolute; 
@@ -67,46 +73,65 @@ body, html {
             background: #ff5555; 
             transform: translate(-50%, -50%); 
         }
+
         #compass {
-    position: absolute;
-    top: 10px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 100px;
-    height: 100px;
-    text-align: center;
-}
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 100px;
+            height: 100px;
+            text-align: center;
+        }
 
-.direction {
-    position: absolute;
-    font-size: 20px;
-    font-weight: bold;
-    color: #00ffff; /* Neon cyan for sci-fi vibe */
-    text-shadow: 0 0 5px #00ffff;
-}
+        .direction {
+            position: absolute;
+            font-size: 20px;
+            font-weight: bold;
+            color: #00ffff;
+            text-shadow: 0 0 5px #00ffff;
+        }
 
-#compassN { top: 0; left: 50%; transform: translateX(-50%); }
-#compassE { right: 0; top: 50%; transform: translateY(-50%); }
-#compassS { bottom: 0; left: 50%; transform: translateX(-50%); }
-#compassW { left: 0; top: 50%; transform: translateY(-50%); }
+        #compassN { top: 0; left: 50%; transform: translateX(-50%); }
+        #compassE { right: 0; top: 50%; transform: translateY(-50%); }
+        #compassS { bottom: 0; left: 50%; transform: translateX(-50%); }
+        #compassW { left: 0; top: 50%; transform: translateY(-50%); }
 
-.bullet-indicators {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    pointer-events: none; /* Prevents blocking clicks */
-}
+        .bullet-indicators {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
 
-.bullet-indicator {
-    width: 0;
-    height: 0;
-    border-left: 10px solid transparent;
-    border-right: 10px solid transparent;
-    border-bottom: 20px solid #ff0000; /* Red arrow */
-    opacity: 0.8;
-}
+        .bullet-indicator {
+            position: absolute;
+            width: 0;
+            height: 0;
+            border-left: 15px solid transparent;
+            border-right: 15px solid transparent;
+            border-bottom: 30px solid #ff0000;
+            opacity: 0.8;
+            transform-origin: center bottom;
+        }
+
+        #startPrompt {
+            position: fixed;
+            top: 20%;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 24px;
+            color: #00ffff;
+            text-shadow: 0 0 10px #00ffff;
+            font-family: 'Orbitron', sans-serif;
+            z-index: 20;
+        }
+
+        #levelUpNotification {
+            opacity: 1;
+        }
     </style>
 </head>
 <body>
@@ -137,7 +162,9 @@ body, html {
             </div>
         </div>
         <div id="progressBar" class="hud-item progress bg-black/70 border border-cyan-400 rounded p-2 shadow-inner shadow-cyan-500/30 text-shadow-md">
-            <span class="label uppercase font-bold text-sm">Course</span>
+            <span class="label uppercase font-bold text-sm">Level</span>
+            <span id="levelValue" class="value text-base ml-2">1</span>
+            <span class="label uppercase font-bold text-sm ml-4">Course</span>
             <div class="progress-bar w-24 h-2 bg-gray-800 border border-cyan-400 relative overflow-hidden" style="--bar-width: 0%;"></div>
             <span class="value text-base mt-1">0%</span>
         </div>
@@ -182,7 +209,7 @@ body, html {
             <label class="flex items-center gap-1">Ship Axis Z: <input type="range" id="spaceshipAxisZ" min="-1" max="1" value="-1" step="0.1" class="w-24 accent-cyan-400"><span id="spaceshipAxisZValue" class="w-12 text-right">-1.0</span></label>
         </div>
         <div id="enemyControls" class="tab-content hidden flex-wrap gap-2">
-            <label class="flex items-center gap-1">Spawn Distance: <input type="range" id="spawnDistance" min="500" max="5000" value="900" step="100" class="w-24 accent-cyan-400"><span id="spawnDistanceValue" class="w-12 text-right">900</span></label>
+            <label class="flex items-center gap-1">Spawn Distance: <input type="range" id="spawnDistance" min="500" max="5000" value="1170" step="100" class="w-24 accent-cyan-400"><span id="spawnDistanceValue" class="w-12 text-right">1170</span></label>
             <label class="flex items-center gap-1">Lateral Offset: <input type="range" id="lateralOffset" min="50" max="1000" value="200" step="50" class="w-24 accent-cyan-400"><span id="lateralOffsetValue" class="w-12 text-right">200</span></label>
             <label class="flex items-center gap-1">Base Speed: <input type="range" id="baseSpeed" min="10" max="100" value="25" step="5" class="w-24 accent-cyan-400"><span id="baseSpeedValue" class="w-12 text-right">25</span></label>
             <label class="flex items-center gap-1">Fire Rate (ms): <input type="range" id="fireRate" min="500" max="2000" value="1000" step="100" class="w-24 accent-cyan-400"><span id="fireRateValue" class="w-12 text-right">1000</span></label>

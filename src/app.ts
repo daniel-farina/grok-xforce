@@ -21,7 +21,7 @@ interface ExplosionInstance {
 
 class PodRacingGame {
     private scene: THREE.Scene = new THREE.Scene();
-    private camera: THREE.PerspectiveCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 20000);
+    private camera: THREE.PerspectiveCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100000);
     private renderer!: THREE.WebGLRenderer;
     private world: CANNON.World = new CANNON.World();
     private canvas!: HTMLCanvasElement;
@@ -157,6 +157,18 @@ private countdownSub!: HTMLElement;   // Subtext for instructions
 
 private shotSounds: HTMLAudioElement[] = []; // For hitting enemies
 private watchoutSounds: HTMLAudioElement[] = []; // For enemy spawns
+private compass!: HTMLElement;
+private compassN!: HTMLElement;
+private compassE!: HTMLElement;
+private compassS!: HTMLElement;
+private compassW!: HTMLElement;
+private bulletIndicators!: HTMLElement;
+private activeBulletIndicators: HTMLElement[] = [];
+
+private enemySpawnQueue: { time: number, count: number }[] = [];
+private levelValue!: HTMLElement;
+private progressBar!: HTMLElement;
+
 
     constructor() {
         this.initialize().then(() => {
@@ -307,7 +319,11 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
         this.startButton = document.getElementById("startButton") as HTMLElement;
         this.difficultyMenu = document.getElementById("difficultyMenu") as HTMLElement;
         this.startPrompt = document.getElementById("startPrompt") as HTMLElement; // Add this line
-    
+        this.bulletIndicators = document.getElementById("bulletIndicators") as HTMLElement;
+        this.progressBar = document.getElementById("progressBar") as HTMLElement;
+        this.levelValue = document.getElementById("levelValue") as HTMLElement;
+        
+        
         // Add controls element
         const controlsElement = document.getElementById("controls") as HTMLElement;
         if (controlsElement) {
@@ -322,14 +338,38 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
         if (!this.countdownSub) console.error("countdownSub element not found");
         if (!this.startPrompt) console.error("startPrompt element not found"); // Add this for debugging
     
+
+         // Add compass elements
+    this.compass = document.getElementById("compass") as HTMLElement;
+    this.compassN = document.getElementById("compassN") as HTMLElement;
+    this.compassE = document.getElementById("compassE") as HTMLElement;
+    this.compassS = document.getElementById("compassS") as HTMLElement;
+    this.compassW = document.getElementById("compassW") as HTMLElement;
+
+
         this.updateHUD();
+    }
+
+    private showLevelUpNotification(): void {
+        const notification = document.createElement("div");
+        notification.id = "levelUpNotification";
+        notification.className = "fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-center font-orbitron text-cyan-400 drop-shadow-[0_0_15px_#00ffff] z-20 text-3xl font-bold";
+        notification.textContent = `Level ${this.level - 1} Completed! +5 Bonus Lives`;
+        document.body.appendChild(notification);
+    
+        // Fade out after 2 seconds
+        setTimeout(() => {
+            notification.style.transition = "opacity 0.5s";
+            notification.style.opacity = "0";
+            setTimeout(() => notification.remove(), 500);
+        }, 2000);
     }
 
     private setupDifficultyButtons(): void {
         const easyButton = document.getElementById("easyButton") as HTMLElement;
         const normalButton = document.getElementById("normalButton") as HTMLElement;
         const hardButton = document.getElementById("hardButton") as HTMLElement;
-
+    
         easyButton.addEventListener("click", () => {
             this.difficulty = 'easy';
             this.lives = 15;
@@ -339,7 +379,7 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
             this.introAudio.play().catch(err => console.error("Audio playback failed:", err));
             this.songs[this.currentSongIndex].play().catch(err => console.error("Song playback failed:", err));
         });
-
+    
         normalButton.addEventListener("click", () => {
             this.difficulty = 'normal';
             this.lives = 10;
@@ -349,18 +389,17 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
             this.introAudio.play().catch(err => console.error("Audio playback failed:", err));
             this.songs[this.currentSongIndex].play().catch(err => console.error("Song playback failed:", err));
         });
-
+    
         hardButton.addEventListener("click", () => {
             this.difficulty = 'hard';
             this.lives = 5;
-            this.basePodSpeed = 50;
+            this.basePodSpeed = 50 * 2; // 4x faster: 50 -> 200
             this.podSpeed = this.basePodSpeed;
+            this.enemySpawnInterval = 12; // Slightly longer interval to balance 4x speed (optional)
             this.startGame();
             this.introAudio.play().catch(err => console.error("Audio playback failed:", err));
             this.songs[this.currentSongIndex].play().catch(err => console.error("Song playback failed:", err));
         });
-
-        
     }
 
     private startGame(): void {
@@ -904,6 +943,12 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
         windowMesh.position.set(0, 0, -7);
         enemyGroup.add(windowMesh);
     
+        // Add target indicator
+        const targetIndicator = this.createEnemyTargetIndicator();
+        targetIndicator.position.set(0, 10, 0); // Position above the enemy
+        enemyGroup.add(targetIndicator);
+        enemyGroup.userData = { targetIndicator }; // Store for animation reference
+    
         const t = (this.podDistance + this.enemySpawnDistance) / this.trackPath.getLength() % 1;
         const basePos = this.trackPath.getPointAt(t);
         const tangent = this.trackPath.getTangentAt(t);
@@ -942,7 +987,13 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
     }
 
     private async createScene(): Promise<void> {
-        this.rng = seedrandom("pod_racing_seed");
+        this.rng = seedrandom(`pod_racing_seed_level_${this.level}`); 
+
+        const fogColor = new THREE.Color(0x555555); // Very dark blue, almost black
+const fogDensity = 0.00002; // Start with a low value for distant fog
+
+// Create exponential fog (better for space)
+this.scene.fog = new THREE.FogExp2(fogColor, fogDensity);
     
         const squareSize = 2.6;
         const squareGeometry = new THREE.BufferGeometry();
@@ -982,25 +1033,47 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
         this.podBody.position.copy(this.pod.position);
         this.world.addBody(this.podBody);
     
-        // Track length reduced by 50% (from 120s to 60s)
-        const trackLength = this.basePodSpeed * 60; // Distance = speed * time (1 minute)
-        const points = [];
-        const numPoints = 33;
-        for (let i = 0; i < numPoints; i++) {
-            const t = i / (numPoints - 1);
-            const x = 1500 * Math.cos(t * 4 * Math.PI);
-            const y = 400 * Math.sin(t * 4 * Math.PI);
-            const z = t * trackLength;
-            points.push(new THREE.Vector3(x, y, z));
-        }
-        this.trackPath = new THREE.CatmullRomCurve3(points, false, 'centripetal', 0.5);
-    
-        const pathPoints = this.trackPath.getPoints(512);
-        const pathGeometry = new THREE.BufferGeometry().setFromPoints(pathPoints);
-        const pathMaterial = new THREE.LineBasicMaterial({ color: 0x00ffff, emissive: 0x00ffff, linewidth: 5, emissiveIntensity: 2 });
-        this.pathLine = new THREE.Line(pathGeometry, pathMaterial);
-        this.pathLine.visible = this.showPathLine;
-        this.scene.add(this.pathLine);
+ 
+    // Base track length: doubled from 60s to 120s at base speed
+    const baseTrackDuration = 120; // Time in seconds at base speed
+    const trackLength = this.basePodSpeed * baseTrackDuration * 2; // 2x longer
+    const points = [];
+
+    // Increase number of points for smoothness with longer track
+    const numPoints = 65; // Doubled from 33 to maintain detail over longer distance
+    const amplitudeX = 1500; // Horizontal amplitude (unchanged)
+    const amplitudeY = 400;  // Vertical amplitude (unchanged)
+    const rotationFactor = 8; // Base rotations (originally 4 * 2π, now doubled to 8 * 2π)
+
+    for (let i = 0; i < numPoints; i++) {
+        const t = i / (numPoints - 1); // Normalized [0, 1]
+        
+        // Dynamic rotations: 2x more spins (8π instead of 4π), plus level-based variation
+        const rotations = rotationFactor * Math.PI + (this.level - 1) * 0.5 * Math.PI; // Add 0.5π per level
+        const x = amplitudeX * Math.cos(t * rotations) * (1 + this.rng() * 0.2); // Add slight randomness
+        const y = amplitudeY * Math.sin(t * rotations) * (1 + this.rng() * 0.2);
+        const z = t * trackLength;
+
+        // Add extra cinematic twists with secondary oscillation
+        const twistFactor = Math.sin(t * rotations * 2); // Double frequency for more action
+        const twistedX = x + twistFactor * amplitudeX * 0.3; // 30% extra twist
+        const twistedY = y + twistFactor * amplitudeY * 0.3;
+
+        points.push(new THREE.Vector3(twistedX, twistedY, z));
+    }
+
+    // Create the smooth path
+    this.trackPath = new THREE.CatmullRomCurve3(points, false, 'centripetal', 0.5);
+
+    // Update path visualization
+    const pathPoints = this.trackPath.getPoints(512); // More points for longer track
+    const pathGeometry = new THREE.BufferGeometry().setFromPoints(pathPoints);
+    const pathMaterial = new THREE.LineBasicMaterial({ color: 0x00ffff, emissive: 0x00ffff, linewidth: 20, emissiveIntensity: 6 });
+    this.pathLine = new THREE.Line(pathGeometry, pathMaterial);
+    this.pathLine.visible = this.showPathLine;
+    this.scene.add(this.pathLine);
+
+        
     
         const baseAsteroidCount = 150;
         const asteroidCount = baseAsteroidCount + Math.floor((this.level - 1) * (1350 / 99));
@@ -1047,16 +1120,7 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
         this.earth.position.set(5000, 2000, 10000);
         this.scene.add(this.earth);
 
-        const atmosphereGeometry = new THREE.SphereGeometry(1050, 32, 32);
-        const atmosphereMaterial = new THREE.MeshStandardMaterial({
-            color: 0x87ceeb,
-            transparent: true,
-            opacity: 0.2,
-            side: THREE.DoubleSide
-        });
-        this.earthAtmosphere = new THREE.Mesh(atmosphereGeometry, atmosphereMaterial);
-        this.earthAtmosphere.position.copy(this.earth.position);
-        this.scene.add(this.earthAtmosphere);
+       
 
         const moonGeometry = new THREE.SphereGeometry(300, 32, 32);
         const moonMaterial = new THREE.MeshStandardMaterial({ map: textureLoader.load('/assets/textures/moon.jpg') });
@@ -1074,7 +1138,7 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
 
         this.scene.userData = { earth: this.earth, moon: this.moon, mars: this.mars };
 
-        const ambientLight = new THREE.AmbientLight(0xddddbb, 6);
+        const ambientLight = new THREE.AmbientLight(0xddddbb, 3);
         this.scene.add(ambientLight);
 
         const directionalLight = new THREE.DirectionalLight(0xffffff, 3);
@@ -1181,51 +1245,98 @@ this.scene.add(this.nebulaSphere);
         this.scene.add(this.dynamicLight);
 
         // Adjust pod speed for current level
-        this.podSpeed = this.basePodSpeed * (1 + (this.level - 1) * 0.01); // 1% increase per level
-   
+        this.basePodSpeed *= 2; // Double the base speed (e.g., from 40 to 80)
+        this.podSpeed = this.basePodSpeed * (1 + (this.level - 1) * 0.01); // Apply level scaling
+    
    
    
    
     }
 
     private addAdditionalPlanets(): void {
+        this.additionalPlanets = []; // Clear existing planets
         const textureLoader = new THREE.TextureLoader();
         const planetConfigs = [
-            { color: 0x00ff00, size: 600, pos: [-8000, 6000, 15000], rings: true, rotationSpeed: 0.0008, texture: '/assets/textures/jupiter.jpg' },
-            { color: 0xff00ff, size: 700, pos: [6000, -4000, 20000], stars: 3, rotationSpeed: 0.0006, texture: '/assets/textures/uranus.jpg' },
-            { color: 0x0000ff, size: 500, pos: [-12000, 2000, 18000], rings: false, rotationSpeed: 0.0007, texture: '/assets/textures/neptune.jpg' },
-            { color: 0xffff00, size: 650, pos: [10000, 8000, 25000], rings: true, rotationSpeed: 0.0005, texture: '/assets/textures/saturn.jpg' },
-            { color: 0xffa500, size: 550, pos: [-4000, -8000, 14000], stars: 2, rotationSpeed: 0.0009, texture: '/assets/textures/venus.jpg' },
-            { color: 0x00ffff, size: 720, pos: [0, 10000, 22000], rings: false, rotationSpeed: 0.0004, texture: '/assets/textures/mercury.jpg' }
+            { color: 0x6e1101, size: 800, rings: true, rotationSpeed: 0.0006, texture: '/assets/planets/01.png' },
+            { color: 0x803e33, size: 950, stars: 3, rotationSpeed: 0.0005, texture: '/assets/planets/02.png' },
+            { color: 0x7a6c50, size: 650, rings: false, rotationSpeed: 0.0008, texture: '/assets/planets/03.png' },
+            { color: 0x141338, size: 900, rings: true, rotationSpeed: 0.0004, texture: '/assets/planets/04.png' },
+            { color: 0x300952, size: 700, stars: 2, rotationSpeed: 0.0010, texture: '/assets/planets/05.png' },
+            { color: 0x521e08, size: 1000, rings: false, rotationSpeed: 0.0003, texture: '/assets/planets/06.png' }
         ];
-
-        planetConfigs.forEach(config => {
-            const planetGeometry = new THREE.SphereGeometry(config.size, 32, 32);
-            const planetMaterial = new THREE.MeshStandardMaterial({ 
+    
+        const trackLength = this.trackPath.getLength();
+        const numPlanets = planetConfigs.length;
+        const minSeparation = trackLength / numPlanets * 0.8; // Base separation (80% of even split)
+        const baseSpreadFactor = 2; // Starting spread (2x original)
+        const additionalSpreadFactor = 5; // Additional 5x spread
+        const totalSpreadFactor = baseSpreadFactor * additionalSpreadFactor; // 10x total spread
+    
+        // Generate evenly spaced base positions with randomization
+        const baseTs = [];
+        for (let i = 0; i < numPlanets; i++) {
+            const baseT = (i / numPlanets) + (this.rng() - 0.5) * 0.1; // Small randomization around even split
+            baseTs.push(Math.max(0.05, Math.min(0.95, baseT))); // Keep within 5%-95% of track
+        }
+        baseTs.sort((a, b) => a - b); // Ensure ascending order
+    
+        planetConfigs.forEach((config, index) => {
+            // Planet geometry with higher detail
+            const planetGeometry = new THREE.SphereGeometry(config.size, 64, 64); // Increased segments for smoothness
+            const planetMaterial = new THREE.MeshLambertMaterial({
                 map: textureLoader.load(config.texture),
-                color: config.color 
+                color: config.color
             });
             const planet = new THREE.Mesh(planetGeometry, planetMaterial);
-            planet.position.set(config.pos[0], config.pos[1], config.pos[2]);
+            
+            // Position along the track with increased spread
+            const t = baseTs[index];
+            const basePos = this.trackPath.getPointAt(t);
+            const tangent = this.trackPath.getTangentAt(t);
+            const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
+            const binormal = tangent.clone().cross(normal).normalize();
+    
+            // Increased offset range (10x original with totalSpreadFactor = 10)
+            const minOffset = 1000 * totalSpreadFactor; // 10,000 units at 10x
+            const maxOffset = 3000 * totalSpreadFactor; // 30,000 units at 10x
+            const offsetX = (this.rng() - 0.5) * (maxOffset - minOffset) + minOffset;
+            const offsetY = (this.rng() - 0.5) * (maxOffset - minOffset) + minOffset;
+            const offsetZ = (this.rng() - 0.5) * 500 * totalSpreadFactor; // 5000 at 10x
+    
+            planet.position.copy(basePos)
+                .addScaledVector(normal, offsetX)
+                .addScaledVector(binormal, offsetY)
+                .addScaledVector(tangent, offsetZ);
             this.scene.add(planet);
+    
 
+    
             let rings: THREE.Mesh | undefined;
-            let stars: THREE.Mesh[] | undefined;
-
+            let stars: THREE.Mesh | undefined;
+    
             if (config.rings) {
-                const ringGeometry = new THREE.RingGeometry(config.size * 1.2, config.size * 1.5, 32);
-                const ringMaterial = new THREE.MeshStandardMaterial({ color: config.color, side: THREE.DoubleSide, transparent: true, opacity: 0.7 });
+                const ringGeometry = new THREE.RingGeometry(config.size * 1.2, config.size * 1.5, 64);
+                const ringMaterial = new THREE.MeshLambertMaterial({ 
+                    color: config.color, 
+                    side: THREE.DoubleSide, 
+                    transparent: true, 
+                    opacity: 0.7
+                });
                 rings = new THREE.Mesh(ringGeometry, ringMaterial);
-                rings.rotation.x = Math.PI / 2;
+                rings.rotation.x = Math.PI / 2 + (this.rng() - 0.5) * 0.2; // Slight tilt variation
                 rings.position.copy(planet.position);
                 this.scene.add(rings);
             }
-
+    
             if (config.stars) {
                 stars = [];
                 for (let i = 0; i < config.stars; i++) {
                     const starGeometry = new THREE.SphereGeometry(50, 16, 16);
-                    const starMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+                    const starMaterial = new THREE.MeshBasicMaterial({ 
+                        color: 0xffffff,
+                        emissive: 0xffffff,
+                        emissiveIntensity: 1
+                    });
                     const star = new THREE.Mesh(starGeometry, starMaterial);
                     const angle = (i / config.stars) * 2 * Math.PI;
                     star.position.set(
@@ -1237,7 +1348,7 @@ this.scene.add(this.nebulaSphere);
                     stars.push(star);
                 }
             }
-
+    
             this.additionalPlanets.push({ mesh: planet, rings, stars, rotationSpeed: config.rotationSpeed });
         });
     }
@@ -1334,6 +1445,8 @@ this.scene.add(this.nebulaSphere);
             this.hitParticles.userData = {};
         }
     }
+
+    
 
     private animate(): void {
         requestAnimationFrame(() => this.animate());
@@ -1454,6 +1567,8 @@ this.scene.add(this.nebulaSphere);
                 this.pauseMenu.style.display = "block";
                 return;
             }
+            this.lives += 5; // Add 5 lives
+            this.showLevelUpNotification(); // Show notification
             this.podDistance = 0;
             this.survivalTime = 0;
             this.podSpeed = this.basePodSpeed * (1 + (this.level - 1) * 0.01);
@@ -1709,16 +1824,27 @@ this.scene.add(this.nebulaSphere);
         }
     
         this.enemySpawnTimer += deltaTime;
-        if (this.enemySpawnTimer >= this.enemySpawnInterval) {
-            const enemyCount = Math.floor(3 + (this.level - 1) * (17 / 99));
-            for (let i = 0; i < enemyCount; i++) {
-                if (this.rng() < 0.5) {
-                    this.spawnEnemyShip();
+if (this.enemySpawnTimer >= this.enemySpawnInterval) {
+    const baseEnemyCount = this.difficulty === 'hard' ? 9 : 3;
+    const enemyCount = Math.floor(baseEnemyCount + (this.level - 1) * (17 / 99));
+    // Spread spawns over the next interval
+    for (let i = 0; i < enemyCount; i++) {
+        const spawnTime = this.survivalTime + (i / enemyCount) * this.enemySpawnInterval;
+        this.enemySpawnQueue.push({ time: spawnTime, count: 1 });
+    }
+    this.enemySpawnTimer = 0;
+}
 
-                }
-            }
-            this.enemySpawnTimer = 0;
+// Process spawn queue
+this.enemySpawnQueue = this.enemySpawnQueue.filter(spawn => {
+    if (this.survivalTime >= spawn.time) {
+        if (this.rng() < 0.5) {
+            this.spawnEnemyShip();
         }
+        return false; // Remove processed spawn
+    }
+    return true; // Keep unprocessed spawns
+});
     
         function makeDistortionCurve(amount) {
             const samples = 44100;
@@ -1735,6 +1861,17 @@ this.scene.add(this.nebulaSphere);
             const enemy = this.enemyShips[i];
             enemy.mesh.position.copy(enemy.body.position);
     
+            // Animate target indicator
+    const indicator = enemy.mesh.userData.targetIndicator as THREE.Mesh;
+    if (indicator) {
+        const time = performance.now() / 1000;
+        const pulse = Math.sin(time * 4) * 0.5 + 0.5; // Blink every 0.25s
+        const scale = 10 + pulse * 5; // Expand from 10 to 15
+        indicator.scale.set(scale, scale, scale);
+        indicator.material.opacity = 0.5 + pulse * 0.3; // Blink opacity 0.5 to 0.8
+        indicator.lookAt(this.camera.position); // Always face the camera
+    }
+
             const distanceToPod = enemy.mesh.position.distanceTo(this.pod.position);
             const speed = this.enemyBaseSpeed * (1 + (this.enemySpawnDistance - distanceToPod) / this.enemySpawnDistance);
             const directionToPod = this.pod.position.clone().sub(enemy.mesh.position).normalize();
@@ -1897,6 +2034,9 @@ this.scene.add(this.nebulaSphere);
                 this.enemyBullets.splice(i, 1);
             }
         }
+
+         // Add bullet source indicators
+        this.updateBulletIndicators();
     
         if (this.dynamicLight) {
             this.dynamicLight.position.copy(this.pod.position);
@@ -1934,10 +2074,10 @@ this.scene.add(this.nebulaSphere);
         const progress = (this.podDistance / trackLength) * 100;
         const progressBar = document.getElementById("progressBar") as HTMLElement;
         if (progressBar) {
-            progressBar.style.setProperty('--progress-width', `${progress}%`);
+            progressBar.style.setProperty('--progress-width', `${progress}%`); // Remove this line
             const progressText = progressBar.querySelector('span') as HTMLElement;
             if (progressText) {
-                progressText.textContent = `${Math.floor(progress)}%`;
+                progressText.textContent = `${Math.floor(progress)}%`; // Remove this line
             }
         }
     
@@ -1945,18 +2085,103 @@ this.scene.add(this.nebulaSphere);
         this.renderer.render(this.scene, this.camera);
     }
 
+    private updateBulletIndicators(): void {
+        // Clear existing indicators
+        this.activeBulletIndicators.forEach(indicator => this.bulletIndicators.removeChild(indicator));
+        this.activeBulletIndicators = [];
+    
+        if (!this.raceStarted || this.isPaused) return;
+    
+        this.enemyShips.forEach(enemy => {
+            // Project enemy position to screen space
+            const enemyPos = enemy.mesh.position.clone();
+            const screenPos = enemyPos.project(this.camera);
+    
+            // Check if enemy is on-screen (within viewport and in front of camera)
+            const isOnScreen = screenPos.x >= -1 && screenPos.x <= 1 && 
+                              screenPos.y >= -1 && screenPos.y <= 1 && 
+                              screenPos.z > 0;
+    
+            // Show indicator if enemy is off-screen or behind the camera
+            if (!isOnScreen || screenPos.z <= 0) {
+                // Create indicator
+                const indicator = document.createElement("div");
+                indicator.className = "bullet-indicator";
+                this.bulletIndicators.appendChild(indicator);
+                this.activeBulletIndicators.push(indicator);
+    
+                // Handle enemies behind the camera
+                let normalizedX = screenPos.x;
+                let normalizedY = screenPos.y;
+                if (screenPos.z <= 0) {
+                    // Reflect position for enemies behind (invert x and y)
+                    normalizedX = -screenPos.x;
+                    normalizedY = -screenPos.y;
+                }
+    
+                // Normalize screen position to handle off-screen cases
+                const magnitude = Math.sqrt(normalizedX * normalizedX + normalizedY * normalizedY);
+                if (magnitude > 1) {
+                    normalizedX = normalizedX / magnitude;
+                    normalizedY = normalizedY / magnitude;
+                }
+    
+                // Clamp to screen edges with a margin
+                const clampedX = Math.max(-0.95, Math.min(0.95, normalizedX));
+                const clampedY = Math.max(-0.95, Math.min(0.95, normalizedY));
+    
+                // Convert to pixel coordinates
+                const left = ((clampedX + 1) / 2) * window.innerWidth;
+                const top = ((1 - clampedY) / 2) * window.innerHeight;
+                indicator.style.left = `${left}px`;
+                indicator.style.top = `${top}px`;
+    
+                // Calculate angle to point toward enemy (adjust for upward-pointing triangle)
+                const angle = (Math.atan2(normalizedY, normalizedX) * (180 / Math.PI) + 90) % 360;
+                indicator.style.transform = `rotate(${angle}deg)`;
+            }
+        });
+    }
+
+    private createEnemyTargetIndicator(): THREE.Mesh {
+        // Create a simple arrow shape pointing upward
+        const geometry = new THREE.BufferGeometry();
+        const vertices = new Float32Array([
+            0, 0, 0,    // Bottom center
+            -0.5, 1, 0, // Top left
+            0.5, 1, 0   // Top right
+        ]);
+        geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+        geometry.setIndex([0, 1, 2]); // Triangle indices
+    
+        const material = new THREE.MeshBasicMaterial({
+            color: 0xff0000, // Red
+            transparent: true,
+            opacity: 0.8,
+            side: THREE.DoubleSide,
+            blending: THREE.AdditiveBlending // Glow effect
+        });
+    
+        const arrow = new THREE.Mesh(geometry, material);
+        arrow.scale.set(10, 10, 10); // Base size, will animate
+        return arrow;
+    }
+
     private updateHUD(): void {
         const healthCounter = document.getElementById("healthCounter") as HTMLElement;
         const scoreCounter = document.getElementById("scoreCounter") as HTMLElement;
         const enemiesKilledCounter = document.getElementById("enemiesKilledCounter") as HTMLElement;
         const progressBar = document.getElementById("progressBar") as HTMLElement;
+        
+        // Explicitly set level
+        this.levelValue.textContent = `${this.level}`;
     
         const healthValue = healthCounter.querySelector(".value") as HTMLElement;
         const healthBar = healthCounter.querySelector(".bar") as HTMLElement;
         const scoreValue = scoreCounter.querySelector(".value") as HTMLElement;
         const enemiesKilledValue = enemiesKilledCounter.querySelector(".value") as HTMLElement;
         const progressBarElement = progressBar.querySelector(".progress-bar") as HTMLElement;
-        const progressValue = progressBar.querySelector(".value") as HTMLElement;
+        const progressValue = progressBar.querySelector(".value:not(#levelValue)") as HTMLElement; // Select the percentage span
     
         healthValue.textContent = `${this.lives}`;
         const shieldPercent = (this.lives / (this.difficulty === 'easy' ? 15 : this.difficulty === 'normal' ? 10 : 5)) * 100;
@@ -1966,15 +2191,28 @@ this.scene.add(this.nebulaSphere);
         scoreValue.textContent = `${Math.floor(this.score)}`;
         enemiesKilledValue.textContent = `${this.enemiesKilled}`;
     
-        // Guard against undefined trackPath
+        // Update progress bar and percentage
         if (this.trackPath) {
             const progress = (this.podDistance / this.trackPath.getLength()) * 100;
-            progressValue.textContent = `${Math.floor(progress)}%`;
+            progressValue.textContent = `${Math.floor(progress)}%`; // Percentage in its own span
             progressBarElement.style.setProperty('--bar-width', `${progress}%`);
         } else {
-            // Default state when trackPath isn’t ready
             progressValue.textContent = "0%";
             progressBarElement.style.setProperty('--bar-width', "0%");
+        }
+    
+        // Compass update (unchanged)
+        if (this.raceStarted && this.trackPath) {
+            const t = this.podDistance / this.trackPath.getLength();
+            const tangent = this.trackPath.getTangentAt(t).normalize();
+            const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion).normalize();
+            const angle = Math.atan2(forward.x, forward.z) - Math.atan2(tangent.x, tangent.z);
+            const normalizedAngle = ((angle + Math.PI) % (2 * Math.PI)) - Math.PI;
+            const highlightThreshold = Math.PI / 4;
+            this.compassN.style.opacity = (Math.abs(normalizedAngle) < highlightThreshold) ? "1" : "0.3";
+            this.compassE.style.opacity = (Math.abs(normalizedAngle - Math.PI / 2) < highlightThreshold) ? "1" : "0.3";
+            this.compassS.style.opacity = (Math.abs(Math.abs(normalizedAngle) - Math.PI) < highlightThreshold) ? "1" : "0.3";
+            this.compassW.style.opacity = (Math.abs(normalizedAngle + Math.PI / 2) < highlightThreshold) ? "1" : "0.3";
         }
     }
 
