@@ -139,6 +139,11 @@
     <canvas id="renderCanvas"></canvas>
     
     <div id="hud" class="fixed top-0 left-0 w-full flex justify-between items-start p-4 font-orbitron text-cyan-400 pointer-events-none z-10">
+        <div id="fastShotCounter" class="hud-item bg-black/70 border border-cyan-400 rounded p-2 shadow-inner shadow-cyan-500/30 text-shadow-md">
+            <span class="label uppercase font-bold text-sm">Fast Shots</span>
+            <span class="value text-base ml-2">0</span>
+        </div>
+       
         <div id="bulletIndicators" class="bullet-indicators"></div>
         <div id="compass" class="compass">
             <span id="compassN" class="direction">N</span>

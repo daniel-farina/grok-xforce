@@ -58,6 +58,7 @@ class PodRacingGame {
     private livesCounter!: HTMLElement;
     private scoreCounter!: HTMLElement;
     private enemiesKilledCounter!: HTMLElement; // New counter for enemies killed
+    private fastShotCounter!: HTMLElement; // Add this line
     private countdownElement!: HTMLElement;
     private hud!: HTMLElement;
     private pauseMenu!: HTMLElement;
@@ -175,10 +176,18 @@ private regularEnemySpawnCount: number = 0; // Counter for regular enemies
 private speedsterSpawnsThisLevel: number = 0; // Counter for speedsters spawned
 private speedsterSpawnQueue: { time: number }[] = []; // Queue for random speedster spawns
 private passingBySound: HTMLAudioElement = new Audio('/assets/passing_by.mp3'); // Sound for speedster
+private speedsterTrails: THREE.Points[] = []; // Array for speedster trails
+private fastShotRounds: number = 0; // Remaining fast shots
+private baseFireRate: number = 100; // Default fire rate (store separately)
+private weavingTimers: Map<CANNON.Body, number> = new Map(); // Track weaving for each speedster
+
+
+
 
     constructor() {
         this.initialize().then(() => {
             console.log("Game initialized");
+            this.baseFireRate = this.fireRate; // Store initial fire rate
         });
     }
 
@@ -314,6 +323,7 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
         this.scoreCounter = document.getElementById("scoreCounter") as HTMLElement;
         this.enemiesKilledCounter = document.getElementById("enemiesKilledCounter") as HTMLElement;
         this.countdownElement = document.getElementById("countdown") as HTMLElement;
+        this.fastShotCounter = document.getElementById("fastShotCounter") as HTMLElement; // Add this
         this.countdownMain = document.getElementById("countdownMain") as HTMLElement;
         this.countdownSub = document.getElementById("countdownSub") as HTMLElement;
         this.hud = document.getElementById("hud") as HTMLElement;
@@ -359,8 +369,7 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
     private spawnSpeedsterShip(): void {
         const speedsterGroup = new THREE.Group();
         
-        // Distinct appearance: a sleek, elongated shape
-        const bodyGeometry = new THREE.ConeGeometry(5, 15, 16);
+        const bodyGeometry = new THREE.ConeGeometry(10, 30, 16);
         const bodyMaterial = new THREE.MeshStandardMaterial({
             color: 0x00ffff,
             metalness: 0.9,
@@ -369,36 +378,38 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
             emissiveIntensity: 1.5
         });
         const bodyMesh = new THREE.Mesh(bodyGeometry, bodyMaterial);
-        bodyMesh.rotation.x = Math.PI / 2; // Point forward
+        bodyMesh.rotation.x = Math.PI / 2;
         speedsterGroup.add(bodyMesh);
     
-        // Spawn at same distance as regular enemies
-        const t = (this.podDistance + this.enemySpawnDistance) / this.trackPath.getLength() % 1; // Match regular enemy distance
-        const basePos = this.trackPath.getPointAt(t);
-        const tangent = this.trackPath.getTangentAt(t);
+        const t = (this.podDistance + this.enemySpawnDistance) / this.trackPath.getLength();
+        const basePos = this.trackPath.getPointAt(t % 1);
+        const tangent = this.trackPath.getTangentAt(t % 1);
         const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
         const binormal = tangent.clone().cross(normal).normalize();
     
-        // Use same lateral offset as regular enemies
-        const spawnLateral = (this.rng() - 0.5) * this.enemyLateralOffset; // Default 200
+        const spawnLateral = (this.rng() - 0.5) * this.enemyLateralOffset;
         const spawnVertical = (this.rng() - 0.5) * this.enemyLateralOffset;
     
         speedsterGroup.position.copy(basePos)
             .addScaledVector(normal, spawnLateral)
             .addScaledVector(binormal, spawnVertical);
+        if (isNaN(speedsterGroup.position.x)) {
+            speedsterGroup.position.copy(this.pod.position).addScaledVector(tangent, this.enemySpawnDistance);
+        }
         this.scene.add(speedsterGroup);
     
+        console.log("Speedster spawned at:", speedsterGroup.position, "Pod at:", this.pod.position);
+    
         const speedsterBody = new CANNON.Body({ mass: 1 });
-        speedsterBody.addShape(new CANNON.Box(new CANNON.Vec3(5, 5, 7.5)));
+        speedsterBody.addShape(new CANNON.Box(new CANNON.Vec3(10, 10, 15)));
         speedsterBody.position.copy(speedsterGroup.position);
         this.world.addBody(speedsterBody);
     
-        // Velocity: aim towards the player
         const podPos = this.pod.position.clone();
         const directionToPod = podPos.clone().sub(speedsterGroup.position).normalize();
-        const speed = this.enemyBaseSpeed * 3; // 3x regular speed
+        const speed = this.enemyBaseSpeed * 3;
         const randomPerturbation = new THREE.Vector3(
-            (this.rng() - 0.5) * 0.2, // Slight randomness
+            (this.rng() - 0.5) * 0.2,
             (this.rng() - 0.5) * 0.2,
             (this.rng() - 0.5) * 0.2
         ).normalize();
@@ -408,14 +419,34 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
             flybyDirection.y * speed,
             flybyDirection.z * speed
         );
-    
-        // Orient towards movement direction
+        console.log("Speedster velocity:", speedsterBody.velocity, "Direction:", flybyDirection);
         speedsterGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), flybyDirection);
     
+        const trailGeometry = new THREE.BufferGeometry();
+        const trailCount = 20;
+        const trailPositions = new Float32Array(trailCount * 3);
+        for (let i = 0; i < trailCount * 3; i += 3) {
+            trailPositions[i] = speedsterGroup.position.x;
+            trailPositions[i + 1] = speedsterGroup.position.y;
+            trailPositions[i + 2] = speedsterGroup.position.z;
+        }
+        trailGeometry.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+        const trailMaterial = new THREE.PointsMaterial({
+            color: 0x00ffff,
+            size: 5,
+            transparent: true,
+            opacity: 0.8,
+            blending: THREE.AdditiveBlending
+        });
+        const trail = new THREE.Points(trailGeometry, trailMaterial);
+        trail.userData = { speedsterBody, lifetimes: new Array(trailCount).fill(1.0) };
+        this.scene.add(trail);
+        this.speedsterTrails.push(trail);
+    
+        this.weavingTimers.set(speedsterBody, 0);
         this.speedsterShips.push({ mesh: speedsterGroup, body: speedsterBody });
         this.speedsterSpawnsThisLevel++;
     
-        // Play passing-by sound
         const soundClone = this.passingBySound.cloneNode(true) as HTMLAudioElement;
         soundClone.volume = 0.7;
         soundClone.play().catch(err => console.error("Passing by sound playback failed:", err));
@@ -1018,6 +1049,13 @@ this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
         if (currentTime - this.lastShotTime < this.fireRate) return;
         this.lastShotTime = currentTime;
     
+        if (this.fastShotRounds > 0) {
+            this.fastShotRounds--;
+            if (this.fastShotRounds === 0) {
+                this.fireRate = this.baseFireRate; // Reset to normal
+            }
+        }
+    
         const laserClone = this.laserSound.cloneNode(true) as HTMLAudioElement;
         laserClone.volume = 0.5;
         laserClone.play().catch(err => console.error("Laser sound playback failed:", err));
@@ -1237,7 +1275,7 @@ this.scene.fog = new THREE.FogExp2(fogColor, fogDensity);
 
         const textureLoader = new THREE.TextureLoader();
         const earthGeometry = new THREE.SphereGeometry(1000, 32, 32);
-        const earthMaterial = new THREE.MeshStandardMaterial({ map: textureLoader.load('/assets/textures/earth.jpg') });
+        const earthMaterial = new THREE.MeshStandardMaterial({ map: textureLoader.load('/assets/earth.png') });
         this.earth = new THREE.Mesh(earthGeometry, earthMaterial);
         this.earth.position.set(5000, 2000, 10000);
         this.scene.add(this.earth);
@@ -1742,9 +1780,15 @@ this.scene.add(this.nebulaSphere);
             this.startCountdown();
 
             this.speedsterShips = [];
+            this.speedsterTrails = [];
+            this.weavingTimers.clear();
+            this.fastShotRounds = 0;
+            this.fireRate = this.baseFireRate; // Reset fire rate
             this.regularEnemySpawnCount = 0;
             this.speedsterSpawnsThisLevel = 0;
             this.speedsterSpawnQueue = [];
+
+            
             return;
         }
     
@@ -2164,15 +2208,140 @@ this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
         // Insert Step 5 here: Speedster update loop
         for (let i = this.speedsterShips.length - 1; i >= 0; i--) {
             const speedster = this.speedsterShips[i];
+            
+            console.log("Speedster body position before update:", speedster.body.position);
+            console.log("Speedster velocity before update:", speedster.body.velocity);
+        
             speedster.mesh.position.copy(speedster.body.position);
-            speedster.mesh.quaternion.copy(this.pod.quaternion); // Match pod orientation for visual effect
-
-            // Remove if too far behind or ahead
+        
+            // Weaving motion
+            const weavingTimer = this.weavingTimers.get(speedster.body) || 0;
+            const weaveOffset = Math.sin(weavingTimer * 5) * 20;
+        
+            // Convert CANNON.Vec3 to THREE.Vector3 explicitly
+            const tangent = new THREE.Vector3(
+                speedster.body.velocity.x,
+                speedster.body.velocity.y,
+                speedster.body.velocity.z
+            ).normalize();
+        
+            // Check for zero vector to prevent NaN
+            if (tangent.lengthSq() === 0) {
+                tangent.set(0, 0, -1); // Fallback towards pod
+            }
+        
+            const normal = new THREE.Vector3(0, 1, 0).cross(tangent);
+            if (isNaN(normal.x) || isNaN(normal.y) || isNaN(normal.z)) {
+                normal.set(1, 0, 0); // Fallback
+            } else {
+                normal.normalize();
+            }
+            const weaveVector = normal.clone().multiplyScalar(weaveOffset * 0.01667);
+            speedster.body.position.vadd(weaveVector as any, speedster.body.position);
+        
+            console.log("Speedster body position after weaving:", speedster.body.position);
+        
+            this.weavingTimers.set(speedster.body, weavingTimer + 0.01667);
+        
+            // Convert velocity to THREE.Vector3 for flyby direction
+            const flybyDirection = new THREE.Vector3(
+                speedster.body.velocity.x,
+                speedster.body.velocity.y,
+                speedster.body.velocity.z
+            ).normalize();
+        
+            if (isNaN(flybyDirection.x) || isNaN(flybyDirection.y) || isNaN(flybyDirection.z)) {
+                flybyDirection.set(0, 0, -1); // Fallback
+            }
+            speedster.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), flybyDirection);
+        
+            for (let j = this.bullets.length - 1; j >= 0; j--) {
+                const bullet = this.bullets[j];
+                if (bullet.mesh.position.distanceTo(speedster.mesh.position) < 15) {
+                    this.fastShotRounds = 100;
+                    this.fireRate = this.baseFireRate / 3;
+                    this.lives += 10;
+        
+                    const escapeSpeed = this.enemyBaseSpeed * 6;
+                    const escapeDirection = new THREE.Vector3();
+                    speedster.body.position.vsub(this.pod.position, escapeDirection as any);
+                    if (isNaN(escapeDirection.x) || isNaN(escapeDirection.y) || isNaN(escapeDirection.z)) {
+                        escapeDirection.set(0, 0, 1); // Fallback away from pod
+                    } else {
+                        escapeDirection.normalize();
+                    }
+                    speedster.body.velocity.set(
+                        escapeDirection.x * escapeSpeed,
+                        escapeDirection.y * escapeSpeed,
+                        escapeDirection.z * escapeSpeed
+                    );
+        
+                    this.scene.remove(bullet.mesh);
+                    this.world.removeBody(bullet.body);
+                    this.bullets.splice(j, 1);
+                    break;
+                }
+            }
+        
             const distanceToPod = speedster.mesh.position.distanceTo(this.pod.position);
-            if (distanceToPod > 2000 || speedster.mesh.position.z < this.pod.position.z - 500) {
+            const zDistance = speedster.mesh.position.z - this.pod.position.z;
+            if (isNaN(distanceToPod) || distanceToPod > 15000 || zDistance < -2000) {
+                console.log("Speedster removed:", speedster.mesh.position, "Distance:", distanceToPod, "Z Distance:", zDistance);
                 this.scene.remove(speedster.mesh);
                 this.world.removeBody(speedster.body);
+                this.weavingTimers.delete(speedster.body);
                 this.speedsterShips.splice(i, 1);
+            } else {
+                console.log("Speedster alive at:", speedster.mesh.position, "Distance:", distanceToPod, "Z:", zDistance);
+            }
+        }
+
+        // Update trails
+        for (let i = this.speedsterTrails.length - 1; i >= 0; i--) {
+            const trail = this.speedsterTrails[i];
+            const positions = trail.geometry.attributes.position.array as Float32Array;
+            const lifetimes = trail.userData.lifetimes as number[];
+            const speedsterBody = trail.userData.speedsterBody as CANNON.Body;
+        
+            if (!speedsterBody || !this.world.bodies.includes(speedsterBody)) {
+                this.scene.remove(trail);
+                this.speedsterTrails.splice(i, 1);
+                continue;
+            }
+        
+            let allExpired = true;
+        
+            for (let j = 0; j < positions.length; j += 3) {
+                if (lifetimes[j / 3] > 0) {
+                    const offset = (j / 3) * 0.05;
+                    const velocity = new THREE.Vector3(
+                        speedsterBody.velocity.x,
+                        speedsterBody.velocity.y,
+                        speedsterBody.velocity.z
+                    );
+                    positions[j] = speedsterBody.position.x - velocity.x * offset;
+                    positions[j + 1] = speedsterBody.position.y - velocity.y * offset;
+                    positions[j + 2] = speedsterBody.position.z - velocity.z * offset;
+        
+                    if (isNaN(positions[j]) || isNaN(positions[j + 1]) || isNaN(positions[j + 2])) {
+                        positions[j] = speedsterBody.position.x;
+                        positions[j + 1] = speedsterBody.position.y;
+                        positions[j + 2] = speedsterBody.position.z;
+                    }
+        
+                    lifetimes[j / 3] -= 0.01667;
+                    allExpired = false;
+                }
+            }
+        
+            trail.geometry.attributes.position.needsUpdate = true;
+            trail.material.opacity = Math.max(0, lifetimes[0] / 1.0);
+        
+            if (allExpired) {
+                this.scene.remove(trail);
+                this.speedsterTrails.splice(i, 1);
+            } else {
+                trail.geometry.computeBoundingSphere();
             }
         }
     
@@ -2347,7 +2516,7 @@ this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
         const scoreCounter = document.getElementById("scoreCounter") as HTMLElement;
         const enemiesKilledCounter = document.getElementById("enemiesKilledCounter") as HTMLElement;
         const progressBar = document.getElementById("progressBar") as HTMLElement;
-        
+        const fastShotCounter = document.getElementById("fastShotCounter") as HTMLElement; // Add this
         // Explicitly set level
         this.levelValue.textContent = `${this.level}`;
     
@@ -2357,7 +2526,8 @@ this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
         const enemiesKilledValue = enemiesKilledCounter.querySelector(".value") as HTMLElement;
         const progressBarElement = progressBar.querySelector(".progress-bar") as HTMLElement;
         const progressValue = progressBar.querySelector(".value:not(#levelValue)") as HTMLElement; // Select the percentage span
-    
+        const fastShotValue = fastShotCounter.querySelector(".value") as HTMLElement; // Add this
+
         healthValue.textContent = `${this.lives}`;
         const shieldPercent = (this.lives / (this.difficulty === 'easy' ? 15 : this.difficulty === 'normal' ? 10 : 5)) * 100;
         healthBar.style.setProperty('--bar-width', `${shieldPercent}%`);
@@ -2365,7 +2535,8 @@ this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
     
         scoreValue.textContent = `${Math.floor(this.score)}`;
         enemiesKilledValue.textContent = `${this.enemiesKilled}`;
-    
+    fastShotValue.textContent = `${this.fastShotRounds}`; // Display remaining fast shots
+
         // Update progress bar and percentage
         if (this.trackPath) {
             const progress = (this.podDistance / this.trackPath.getLength()) * 100;
