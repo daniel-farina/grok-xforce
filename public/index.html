@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pod Racing Game - Wipeout Style</title>
+    <title>Xforce Game developed with GrokAI</title>
+
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
     <style>
@@ -35,7 +36,7 @@
 
         .progress-bar::before { 
             background: #00ff00; 
-            width: var(--bar-width); /* Already correct in your CSS */
+            width: var(--bar-width);
         }
 
         #crosshair { 
@@ -74,16 +75,16 @@
             transform: translate(-50%, -50%); 
         }
 
+        #compassContainer {
+            position: fixed;
+            bottom: 4px;
+            left: 4px;
+        }
         #compass {
-            position: absolute;
-            top: 10px;
-            left: 50%;
-            transform: translateX(-50%);
             width: 100px;
             height: 100px;
             text-align: center;
         }
-
         .direction {
             position: absolute;
             font-size: 20px;
@@ -137,19 +138,27 @@
 <body>
     <div id="startPrompt">Press Start to Begin</div>
     <canvas id="renderCanvas"></canvas>
-    
+    <div id="ammoCounter">Ammo: 30</div>
+    <div id="crosshair">+</div>
     <div id="hud" class="fixed top-0 left-0 w-full flex justify-between items-start p-4 font-orbitron text-cyan-400 pointer-events-none z-10">
-        <div id="fastShotCounter" class="hud-item bg-black/70 border border-cyan-400 rounded p-2 shadow-inner shadow-cyan-500/30 text-shadow-md">
-            <span class="label uppercase font-bold text-sm">Fast Shots</span>
-            <span class="value text-base ml-2">0</span>
+        <div class="flex flex-col gap-2">
+            <div id="fastShotCounter" class="hud-item bg-black/70 border border-cyan-400 rounded p-2 shadow-inner shadow-cyan-500/30 text-shadow-md">
+                <span class="label uppercase font-bold text-sm">Fast Shots</span>
+                <span class="value text-base ml-2">0</span>
+            </div>
+            <div id="speedDisplay" class="hud-item bg-black/70 border border-cyan-400 rounded p-2 shadow-inner shadow-cyan-500/30 text-shadow-md">
+                <span class="label uppercase font-bold text-sm">Speed</span>
+                <span class="value text-base ml-2">0</span>
+            </div>
         </div>
-       
         <div id="bulletIndicators" class="bullet-indicators"></div>
-        <div id="compass" class="compass">
-            <span id="compassN" class="direction">N</span>
-            <span id="compassE" class="direction">E</span>
-            <span id="compassS" class="direction">S</span>
-            <span id="compassW" class="direction">W</span>
+        <div id="compassContainer" class="fixed bottom-4 left-4 flex flex-col items-center">
+            <div id="compass" class="compass mt-2">
+                <span id="compassN" class="direction">N</span>
+                <span id="compassE" class="direction">E</span>
+                <span id="compassS" class="direction">S</span>
+                <span id="compassW" class="direction">W</span>
+            </div>
         </div>
         <div class="flex gap-4">
             <div id="healthCounter" class="hud-item bg-black/70 border border-cyan-400 rounded p-2 shadow-inner shadow-cyan-500/30 text-shadow-md">
@@ -166,21 +175,22 @@
                 <span class="value text-base ml-2">0</span>
             </div>
         </div>
-        <div id="progressBar" class="hud-item progress bg-black/70 border border-cyan-400 rounded p-2 shadow-inner shadow-cyan-500/30 text-shadow-md">
+        <div class="hud-item progress bg-black/70 border border-cyan-400 rounded p-2 shadow-inner shadow-cyan-500/30 text-shadow-md">
             <span class="label uppercase font-bold text-sm">Level</span>
             <span id="levelValue" class="value text-base ml-2">1</span>
-            <span class="label uppercase font-bold text-sm ml-4">Course</span>
-            <div class="progress-bar w-24 h-2 bg-gray-800 border border-cyan-400 relative overflow-hidden" style="--bar-width: 0%;"></div>
-            <span class="value text-base mt-1">0%</span>
+            <div id="progressBar">
+                <div class="progress-bar w-24 h-2 bg-gray-800 border border-cyan-400 relative overflow-hidden" style="--bar-width: 0%;"></div>
+                <span class="value text-base mt-1">0%</span>
+            </div>
         </div>
     </div>
     <div id="countdown" class="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-center font-orbitron text-cyan-400 drop-shadow-[0_0_15px_#00ffff] z-10">
         <div id="countdownMain" class="text-5xl font-bold"></div>
         <div id="countdownSub" class="text-lg mt-2 hidden"></div>
     </div>
-    <div id="pauseMenu" class="hidden fixed bottom-5 right-5 bg-[#0a0f1f]/90 border-2 border-cyan-400 rounded-lg p-5 text-cyan-400 text-center shadow-[0_0_15px_rgba(0,255,255,0.5)] z-20 font-orbitron">
-        <h2 class="text-xl font-bold">Paused</h2>
-        <button id="resumeButton" class="mt-2 px-6 py-2 bg-cyan-400 text-[#0a0f1f] rounded hover:bg-cyan-500 shadow-[0_0_5px_#00ffff]">Resume</button>
+    <div id="pauseMenu" class="hidden fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-black/20 border-2 border-cyan-400 rounded-lg p-8 text-cyan-400 text-center shadow-[0_0_15px_rgba(0,255,255,0.5)] z-20 font-orbitron w-96">
+        <h2 class="text-3xl font-bold mb-4">Paused</h2>
+        <button id="resumeButton" class="mt-2 px-8 py-3 bg-cyan-400 text-[#0a0f1f] rounded hover:bg-cyan-500 shadow-[0_0_5px_#00ffff] text-lg">Resume</button>
     </div>
     <div id="gameOverMenu" class="hidden fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-[#0a0f1f]/90 border-2 border-cyan-400 rounded-lg p-5 text-cyan-400 text-center shadow-[0_0_15px_rgba(0,255,255,0.5)] z-20 font-orbitron">
         <h2 class="text-2xl font-bold">Game Over!</h2>
@@ -240,6 +250,12 @@
             </select></label>
         </div>
     </div>
+    <a href="https://x.com/Daniel_Farinax" target="_blank" id="twitterLink" class="fixed bottom-4 right-4 bg-[#0a0f1f]/70 border border-cyan-400 rounded-full p-2 text-cyan-400 font-orbitron text-sm hover:bg-cyan-400 hover:text-[#0a0f1f] transition-colors shadow-[0_0_5px_#00ffff] z-20">
+        <svg class="w-6 h-6 inline-block mr-1" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+        </svg>
+        @Daniel_Farinax
+    </a>
     <video id="nebulaVideo" hidden loop muted playsinline>
         <source src="/assets/nebula.mp4" type="video/mp4">
     </video>

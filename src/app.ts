@@ -1191,7 +1191,7 @@ if (!enemyVideo) {
         const enemyGroup = new THREE.Group();
         const bodyGeometry = new THREE.SphereGeometry(7, 16, 16);
         const bodyMaterial = new THREE.MeshStandardMaterial({
-            map: this.enemyVideoTexture, // Replace this.metalTexture with video texture
+            map: this.enemyVideoTexture,
             metalness: 0.8,
             roughness: 0.4
         });
@@ -1223,6 +1223,10 @@ if (!enemyVideo) {
             .addScaledVector(normal, (this.rng() - 0.5) * this.enemyLateralOffset)
             .addScaledVector(binormal, (this.rng() - 0.5) * this.enemyLateralOffset);
         enemyGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), tangent);
+        
+        // Assign spawn position relative to track progress
+        enemyGroup.userData.spawnPodDistance = this.podDistance + this.enemySpawnDistance;
+    
         this.scene.add(enemyGroup);
     
         const enemyBody = new CANNON.Body({ mass: 1 });
@@ -1759,7 +1763,7 @@ this.scene.add(this.nebulaSphere);
     
         const tangentSpaship = this.trackPath.getTangentAt(this.podDistance / this.trackPath.getLength());
         if (this.cameraMode === 0) {
-            this.neonSquare.visible = this.showNeonSquare; // Controlled by showNeonSquare
+            this.neonSquare.visible = this.showNeonSquare;
             if (this.showNeonSquare) {
                 this.neonSquare.position.copy(this.pod.position).addScaledVector(tangentSpaship, -3);
                 const tangentNeon = this.trackPath.getTangentAt(this.podDistance / this.trackPath.getLength());
@@ -1798,36 +1802,35 @@ this.scene.add(this.nebulaSphere);
             const angle = startAngle + (this.introTime / this.introDuration) * (2 * Math.PI / 6);
             const radius = 20;
             const podPos = this.pod.position;
-        
+    
             this.camera.position.set(
                 podPos.x + radius * Math.cos(angle),
                 podPos.y + 80,
                 podPos.z + radius * Math.sin(angle)
             );
             this.camera.lookAt(podPos);
-        
+    
             this.renderer.render(this.scene, this.camera);
-        
+    
             if (this.introTime >= this.introDuration || this.introAudio.ended) {
                 this.isIntroPlaying = false;
                 this.introTime = 0;
                 this.countdownTimer = 0;
                 this.countdownElement.style.display = "block";
-        
-                // Snap to adjusted first-person POV
+    
                 const t = this.podDistance / this.trackPath.getLength();
                 const tangent = this.trackPath.getTangentAt(t);
                 const normal = new THREE.Vector3(0, 1, 0).cross(tangent).normalize();
                 const up = new THREE.Vector3(0, 1, 0);
                 this.camera.position.copy(this.pod.position)
-                    .addScaledVector(tangent, -1)   // 1 unit behind
-                    .addScaledVector(up, 2)         // 2 units above
-                    .addScaledVector(normal, 1);    // 1 unit right
-                this.camera.quaternion.copy(this.pod.quaternion); // Match pod orientation instantly
+                    .addScaledVector(tangent, -1)
+                    .addScaledVector(up, 2)
+                    .addScaledVector(normal, 1);
+                this.camera.quaternion.copy(this.pod.quaternion);
             }
             return;
         }
-
+    
         if (!this.raceStarted) {
             this.countdownTimer += deltaTime;
             const timeLeft = Math.max(0, this.countdown - this.countdownTimer);
@@ -1850,7 +1853,7 @@ this.scene.add(this.nebulaSphere);
             if (this.countdownMain) this.countdownMain.textContent = mainText;
             if (this.countdownElement) this.countdownElement.style.display = "block";
             this.renderer.render(this.scene, this.camera);
-        
+    
             if (timeLeft <= 0 && this.countdownElement) {
                 this.countdownElement.style.display = "none";
             }
@@ -1875,24 +1878,21 @@ this.scene.add(this.nebulaSphere);
             this.showLevelUpNotification();
             this.podDistance = 0;
             this.survivalTime = 0;
-        
-            // Speed scaling: 3x base by level 20 (linear increase)
-            const targetSpeedMultiplier = this.difficulty === 'hard' ? 3 : 2; // 3x for Hard, 2x for others
-            const speedIncreasePerLevel = (targetSpeedMultiplier - 1) * this.basePodSpeed / 19; // Spread over levels 1-20
-            const cappedLevel = Math.min(this.level - 1, 19); // Cap at level 20
+    
+            const targetSpeedMultiplier = this.difficulty === 'hard' ? 3 : 2;
+            const speedIncreasePerLevel = (targetSpeedMultiplier - 1) * this.basePodSpeed / 19;
+            const cappedLevel = Math.min(this.level - 1, 19);
             this.podSpeed = this.basePodSpeed + cappedLevel * speedIncreasePerLevel;
-        
-            // Enemy and spawn scaling
-            const spawnReduction = 1 - Math.min(0.5, cappedLevel * 0.025); // Up to 50% reduction by level 20
+    
+            const spawnReduction = 1 - Math.min(0.5, cappedLevel * 0.025);
             this.asteroidSpawnInterval = this.asteroidSpawnInterval * spawnReduction;
             this.enemySpawnInterval = this.enemySpawnInterval * spawnReduction;
-        
-            const aggressionFactor = 1 + cappedLevel * 0.05; // 5% increase per level, max 2x by level 20
+    
+            const aggressionFactor = 1 + cappedLevel * 0.05;
             this.enemyBaseSpeed = Math.min(this.enemyBaseSpeed * 2, this.enemyBaseSpeed * aggressionFactor);
             this.enemyFireRate = Math.max(300, this.enemyFireRate / aggressionFactor);
             this.enemyBulletSpeed = Math.min(this.enemyBulletSpeed * 2, this.enemyBulletSpeed * aggressionFactor);
-        
-            // Recreate scene
+    
             this.scene.remove(this.pathLine);
             this.obstacles.forEach(o => {
                 this.scene.remove(o.mesh);
@@ -1922,19 +1922,18 @@ this.scene.add(this.nebulaSphere);
             this.createScene();
             this.pathLine.visible = this.showPathLine;
             this.startCountdown();
-
+    
             this.speedsterShips = [];
             this.speedsterTrails = [];
             this.speedsterParticles.forEach(p => this.scene.remove(p.points));
             this.speedsterParticles = [];
             this.weavingTimers.clear();
             this.fastShotRounds = 0;
-            this.fireRate = this.baseFireRate; // Reset fire rate
+            this.fireRate = this.baseFireRate;
             this.regularEnemySpawnCount = 0;
             this.speedsterSpawnsThisLevel = 0;
             this.speedsterSpawnQueue = [];
-
-            
+    
             return;
         }
     
@@ -1976,12 +1975,11 @@ this.scene.add(this.nebulaSphere);
         if (!this.moveLeft && !this.moveRight) this.podOffsetX *= 0.9;
         if (!this.moveUp && !this.moveDown) this.podOffsetY *= 0.9;
     
-         // Update spaceship engine sound based on yaw
-    const baseFrequency = 100; // Base engine frequency
-    const yawRange = Math.PI / 4; // Max yaw range from setupInput
-    const frequencyShift = (this.yaw / yawRange) * 50; // Shift frequency by ±50 Hz
-    this.spaceshipEngineOscillator.frequency.setValueAtTime(baseFrequency + frequencyShift, this.audioContext.currentTime);
-
+        const baseFrequency = 100;
+        const yawRange = Math.PI / 4;
+        const frequencyShift = (this.yaw / yawRange) * 50;
+        this.spaceshipEngineOscillator.frequency.setValueAtTime(baseFrequency + frequencyShift, this.audioContext.currentTime);
+    
         const tNext = Math.min(t + 0.01, 1);
         const tangentNext = this.trackPath.getTangentAt(tNext);
         const curvature = tangent.distanceTo(tangentNext) / 0.01;
@@ -1996,15 +1994,10 @@ this.scene.add(this.nebulaSphere);
     
         switch (this.cameraMode) {
             case 0:
-                // Position camera relative to pod (e.g., slightly behind and above)
                 const tangent = this.trackPath.getTangentAt(t);
-                this.camera.position.copy(this.pod.position).addScaledVector(tangent, -2); // Adjust offset as needed
-        
-                // Apply pod's base orientation (aligned with track)
+                this.camera.position.copy(this.pod.position).addScaledVector(tangent, -2);
                 const baseQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), tangent);
                 this.camera.quaternion.copy(baseQuat);
-        
-                // Add full 360-degree yaw and clamped pitch from mouse input
                 const yawQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
                 const pitchQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), this.pitch);
                 this.camera.quaternion.multiply(yawQuat).multiply(pitchQuat);
@@ -2033,7 +2026,7 @@ this.scene.add(this.nebulaSphere);
             planet.mesh.rotation.x += planet.rotationSpeedX || 0;
             planet.mesh.rotation.y += planet.rotationSpeedY || planet.rotationSpeed;
             planet.mesh.rotation.z += planet.rotationSpeedZ || 0;
-        
+    
             if (planet.rings) planet.rings.rotation.z += (planet.rotationSpeedY || planet.rotationSpeed) * 0.5;
             if (planet.stars) {
                 planet.stars.forEach((star, index) => {
@@ -2081,7 +2074,7 @@ this.scene.add(this.nebulaSphere);
                 this.triggerHitParticles();
                 if (this.lives <= 0) {
                     this.isPaused = true;
-                    this.gameOverMenu.style.display = "block"; // Show game over menu
+                    this.gameOverMenu.style.display = "block";
                 }
             }
         }
@@ -2160,44 +2153,41 @@ this.scene.add(this.nebulaSphere);
     
         this.enemySpawnTimer += deltaTime;
         if (this.enemySpawnTimer >= this.enemySpawnInterval) {
-            const baseEnemyCount = this.difficulty === 'easy' ? 2 : this.difficulty === 'normal' ? 3 : 2; // Hard starts at 2
-            const levelFactor = this.difficulty === 'hard' ? Math.min(19, this.level - 1) * 0.026315 : (this.level - 1) * (10 / 99); // Hard: +1 by 20, Others: +10 by 100
-            const enemyCount = Math.floor(baseEnemyCount + levelFactor); // Hard: 2 to 3 by level 20
+            const baseEnemyCount = this.difficulty === 'easy' ? 2 : this.difficulty === 'normal' ? 3 : 2;
+            const levelFactor = this.difficulty === 'hard' ? Math.min(19, this.level - 1) * 0.026315 : (this.level - 1) * (10 / 99);
+            const enemyCount = Math.floor(baseEnemyCount + levelFactor);
             for (let i = 0; i < enemyCount; i++) {
                 const spawnTime = this.survivalTime + (i / enemyCount) * this.enemySpawnInterval;
                 this.enemySpawnQueue.push({ time: spawnTime, count: 1 });
             }
-                // Plan speedster spawns (2-3 total per level)
-    if (this.speedsterSpawnsThisLevel === 0) { // Only plan once per level
-        const extraSpeedsters = this.rng() < 0.5 ? 1 : 2; // 1 or 2 additional spawns
-        const totalSpeedsters = 1 + extraSpeedsters; // 2 or 3 total
-        for (let i = 0; i < extraSpeedsters; i++) {
-            const randomTime = this.survivalTime + this.rng() * (this.trackPath.getLength() / this.podSpeed); // Random time within level
-            this.speedsterSpawnQueue.push({ time: randomTime });
-        }
-    }
+            if (this.speedsterSpawnsThisLevel === 0) {
+                const extraSpeedsters = this.rng() < 0.5 ? 1 : 2;
+                const totalSpeedsters = 1 + extraSpeedsters;
+                for (let i = 0; i < extraSpeedsters; i++) {
+                    const randomTime = this.survivalTime + this.rng() * (this.trackPath.getLength() / this.podSpeed);
+                    this.speedsterSpawnQueue.push({ time: randomTime });
+                }
+            }
             this.enemySpawnTimer = 0;
         }
-
-// Process regular enemy spawn queue
-this.enemySpawnQueue = this.enemySpawnQueue.filter(spawn => {
-    if (this.survivalTime >= spawn.time) {
-        if (this.rng() < 0.5) {
-            this.spawnEnemyShip();
-        }
-        return false;
-    }
-    return true;
-});
-
-// Process speedster spawn queue
-this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
-    if (this.survivalTime >= spawn.time && this.speedsterSpawnsThisLevel < 3) { // Cap at 3
-        this.spawnSpeedsterShip();
-        return false;
-    }
-    return true;
-});
+    
+        this.enemySpawnQueue = this.enemySpawnQueue.filter(spawn => {
+            if (this.survivalTime >= spawn.time) {
+                if (this.rng() < 0.5) {
+                    this.spawnEnemyShip();
+                }
+                return false;
+            }
+            return true;
+        });
+    
+        this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
+            if (this.survivalTime >= spawn.time && this.speedsterSpawnsThisLevel < 3) {
+                this.spawnSpeedsterShip();
+                return false;
+            }
+            return true;
+        });
     
         function makeDistortionCurve(amount) {
             const samples = 44100;
@@ -2214,18 +2204,18 @@ this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
             const enemy = this.enemyShips[i];
             enemy.mesh.position.copy(enemy.body.position);
     
-                    // Animate target indicator
             const indicator = enemy.mesh.userData.targetIndicator as THREE.Mesh;
             if (indicator) {
                 const time = performance.now() / 1000;
-                const pulse = Math.sin(time * 4) * 0.5 + 0.5; // Blink every 0.25s
-                const scale = 10 + pulse * 5; // Expand from 10 to 15
+                const pulse = Math.sin(time * 4) * 0.5 + 0.5;
+                const scale = 10 + pulse * 5;
                 indicator.scale.set(scale, scale, scale);
-                indicator.material.opacity = 0.5 + pulse * 0.3; // Blink opacity 0.5 to 0.8
-                indicator.lookAt(this.camera.position); // Always face the camera
+                indicator.material.opacity = 0.5 + pulse * 0.3;
+                indicator.lookAt(this.camera.position);
             }
-
+    
             const distanceToPod = enemy.mesh.position.distanceTo(this.pod.position);
+            const trackDistanceFromPod = enemy.mesh.userData.spawnPodDistance - this.podDistance;
             const speed = this.enemyBaseSpeed * (1 + (this.enemySpawnDistance - distanceToPod) / this.enemySpawnDistance);
             const directionToPod = this.pod.position.clone().sub(enemy.mesh.position).normalize();
             const erraticFactor = this.level * 0.1;
@@ -2245,60 +2235,50 @@ this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
                 lastBurstTime: currentTime
             };
             let shotsFired = this.enemyShotCounts.get(enemy.body) || 0;
-            
-
-            // Check if it's time to start or continue a burst
+    
             if (!burstState.isBursting && currentTime - burstState.lastBurstTime >= burstState.burstDelay && shotsFired < this.shotsToLoseLife) {
                 burstState.isBursting = true;
-                burstState.burstCount = this.rng() < 0.5 ? 1 : 2; // Randomly 1 or 2 shots
+                burstState.burstCount = this.rng() < 0.5 ? 1 : 2;
                 burstState.lastBurstTime = currentTime;
             }
-
-    // Handle burst firing
-    if (burstState.isBursting && burstState.burstCount > 0) {
-        const timeSinceLastShot = currentTime - burstState.lastBurstTime;
-        if (timeSinceLastShot >= this.burstInterval || timeSinceLastShot === 0) {
-            // Fire a bullet
-            const laserClone = this.enemyLaserSound.cloneNode(true) as HTMLAudioElement;
-            laserClone.volume = 0.5;
-            laserClone.play().catch(err => console.error("Enemy laser sound playback failed:", err));
-
-            const bulletGeometry = new THREE.SphereGeometry(1, 8, 8);
-            const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-            const bulletMesh = new THREE.Mesh(bulletGeometry, bulletMaterial);
-            bulletMesh.position.copy(enemy.mesh.position).add(directionToPod.clone().multiplyScalar(8));
-            this.scene.add(bulletMesh);
-
-            const bulletBody = new CANNON.Body({ mass: 1 });
-            bulletBody.addShape(new CANNON.Sphere(1));
-            bulletBody.position.copy(bulletMesh.position);
-            bulletBody.velocity.set(directionToPod.x * this.enemyBulletSpeed, directionToPod.y * this.enemyBulletSpeed, directionToPod.z * this.enemyBulletSpeed);
-            this.world.addBody(bulletBody);
-
-            this.enemyBullets.push({ mesh: bulletMesh, body: bulletBody });
-            burstState.burstCount--;
-            burstState.lastBurstTime = currentTime;
-            shotsFired++;
-            this.enemyShotCounts.set(enemy.body, shotsFired);
-
-            // Set damage cooldown after first shot in burst
-            if (!this.enemyDamageCooldowns.has(enemy.body)) {
-                this.enemyDamageCooldowns.set(enemy.body, currentTime + this.burstInterval * 2); // Cooldown lasts beyond burst
+    
+            if (burstState.isBursting && burstState.burstCount > 0) {
+                const timeSinceLastShot = currentTime - burstState.lastBurstTime;
+                if (timeSinceLastShot >= this.burstInterval || timeSinceLastShot === 0) {
+                    const laserClone = this.enemyLaserSound.cloneNode(true) as HTMLAudioElement;
+                    laserClone.volume = 0.5;
+                    laserClone.play().catch(err => console.error("Enemy laser sound playback failed:", err));
+    
+                    const bulletGeometry = new THREE.SphereGeometry(1, 8, 8);
+                    const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+                    const bulletMesh = new THREE.Mesh(bulletGeometry, bulletMaterial);
+                    bulletMesh.position.copy(enemy.mesh.position).add(directionToPod.clone().multiplyScalar(8));
+                    this.scene.add(bulletMesh);
+    
+                    const bulletBody = new CANNON.Body({ mass: 1 });
+                    bulletBody.addShape(new CANNON.Sphere(1));
+                    bulletBody.position.copy(bulletMesh.position);
+                    bulletBody.velocity.set(directionToPod.x * this.enemyBulletSpeed, directionToPod.y * this.enemyBulletSpeed, directionToPod.z * this.enemyBulletSpeed);
+                    this.world.addBody(bulletBody);
+    
+                    this.enemyBullets.push({ mesh: bulletMesh, body: bulletBody });
+                    burstState.burstCount--;
+                    burstState.lastBurstTime = currentTime;
+                    shotsFired++;
+                    this.enemyShotCounts.set(enemy.body, shotsFired);
+    
+                    if (!this.enemyDamageCooldowns.has(enemy.body)) {
+                        this.enemyDamageCooldowns.set(enemy.body, currentTime + this.burstInterval * 2);
+                    }
+                }
+    
+                if (burstState.burstCount === 0) {
+                    burstState.isBursting = false;
+                    burstState.burstDelay = this.minBurstDelay + this.rng() * (this.maxBurstDelay - this.minBurstDelay);
+                }
             }
-        }
-
-        // End burst and set random delay for next
-        if (burstState.burstCount === 0) {
-            burstState.isBursting = false;
-            burstState.burstDelay = this.minBurstDelay + this.rng() * (this.maxBurstDelay - this.minBurstDelay);
-        }
-    }
-
-    this.enemyBurstStates.set(enemy.body, burstState);
-
-
-
-            
+    
+            this.enemyBurstStates.set(enemy.body, burstState);
     
             for (let j = this.bullets.length - 1; j >= 0; j--) {
                 const bullet = this.bullets[j];
@@ -2314,9 +2294,8 @@ this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
                     this.world.removeBody(bullet.body);
                     this.bullets.splice(j, 1);
                     this.score += 100;
-                    this.enemiesKilled += 1;
-
-                    // Play random shot sound every 15 kills
+                    this.enemiesKilled++;
+    
                     if (this.enemiesKilled % 10 === 0) {
                         const randomShotSound = this.shotSounds[Math.floor(this.rng() * this.shotSounds.length)];
                         (randomShotSound.cloneNode(true) as HTMLAudioElement).play().catch(err => console.error("Shot audio playback failed:", err));
@@ -2338,6 +2317,15 @@ this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
                     this.isPaused = true;
                     this.gameOverMenu.style.display = "block";
                 }
+            } else if (trackDistanceFromPod < -100) {
+                this.scene.remove(enemy.mesh);
+                this.world.removeBody(enemy.body);
+                this.lastEnemyShotTimes.delete(enemy.body);
+                this.enemyHits.delete(enemy.body);
+                this.enemyShotCounts.delete(enemy.body);
+                this.enemyShips.splice(i, 1);
+                console.log(`Enemy despawned at trackDistanceFromPod: ${trackDistanceFromPod}, podDistance: ${this.podDistance}`);
+                continue;
             } else if (distanceToPod > 1000 && shotsFired < this.shotsToLoseLife) {
                 this.lives -= 1;
                 this.triggerHitParticles();
@@ -2353,14 +2341,12 @@ this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
                 }
             }
         }
-
-        // Insert Step 5 here: Speedster update loop
+    
         for (let i = this.speedsterShips.length - 1; i >= 0; i--) {
             const speedster = this.speedsterShips[i];
             
             speedster.mesh.position.copy(speedster.body.position);
         
-            // Weaving motion
             const weavingTimer = this.weavingTimers.get(speedster.body) || 0;
             const weaveOffset = Math.sin(weavingTimer * 5) * 20;
             const tangent = new THREE.Vector3(
@@ -2384,7 +2370,6 @@ this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
         
             this.weavingTimers.set(speedster.body, weavingTimer + 0.01667);
         
-            // Animate rotation and glow
             const time = performance.now() * 0.001;
             const pulse = Math.sin(time * 2) * 0.5 + 0.5;
         
@@ -2411,11 +2396,11 @@ this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
             for (let j = this.bullets.length - 1; j >= 0; j--) {
                 const bullet = this.bullets[j];
                 if (bullet.mesh.position.distanceTo(speedster.mesh.position) < 15) {
-                    this.fastShotRounds = 100; // Always grant fast shots
+                    this.fastShotRounds = 100;
                     this.fireRate = this.baseFireRate / 3;
-                    if (!speedster.mesh.userData.hasGrantedLives) { // Check if lives haven’t been granted
-                        this.lives += 10; // Line to change: now conditional
-                        speedster.mesh.userData.hasGrantedLives = true; // Mark as rewarded
+                    if (!speedster.mesh.userData.hasGrantedLives) {
+                        this.lives += 10;
+                        speedster.mesh.userData.hasGrantedLives = true;
                     }
                 
                     const escapeSpeed = this.enemyBaseSpeed * 6;
@@ -2451,8 +2436,7 @@ this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
                 console.log("Speedster alive at:", speedster.mesh.position, "Distance:", distanceToPod, "Z:", zDistance);
             }
         }
-        
-        // Update speedster particles (after speedsterShips loop)
+    
         for (let i = this.speedsterParticles.length - 1; i >= 0; i--) {
             const particleSystem = this.speedsterParticles[i];
             const positions = particleSystem.points.geometry.attributes.position.array as Float32Array;
@@ -2462,13 +2446,12 @@ this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
         
             for (let j = 0; j < positions.length; j += 3) {
                 if (lifetimes[j / 3] > 0) {
-                    positions[j] += velocities[j / 3].x * 0.01667; // Delta time
+                    positions[j] += velocities[j / 3].x * 0.01667;
                     positions[j + 1] += velocities[j / 3].y * 0.01667;
                     positions[j + 2] += velocities[j / 3].z * 0.01667;
                     lifetimes[j / 3] -= 0.01667;
                     allExpired = false;
                 } else if (lifetimes[j / 3] <= 0 && lifetimes[j / 3] > -1) {
-                    // Respawn particle at speedster position
                     const nearestSpeedster = this.speedsterShips.reduce((closest, s) => {
                         const dist = s.mesh.position.distanceTo(new THREE.Vector3(positions[j], positions[j + 1], positions[j + 2]));
                         return dist < closest.dist ? { mesh: s.mesh, dist } : closest;
@@ -2503,8 +2486,7 @@ this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
                 particleSystem.points.geometry.computeBoundingSphere();
             }
         }
-
-        // Update trails
+    
         for (let i = this.speedsterTrails.length - 1; i >= 0; i--) {
             const trail = this.speedsterTrails[i];
             const positions = trail.geometry.attributes.position.array as Float32Array;
@@ -2586,8 +2568,7 @@ this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
                 this.enemyBullets.splice(i, 1);
             }
         }
-
-         // Add bullet source indicators
+    
         this.updateBulletIndicators();
     
         if (this.dynamicLight) {
@@ -2626,16 +2607,18 @@ this.speedsterSpawnQueue = this.speedsterSpawnQueue.filter(spawn => {
         const progress = (this.podDistance / trackLength) * 100;
         const progressBar = document.getElementById("progressBar") as HTMLElement;
         if (progressBar) {
-            progressBar.style.setProperty('--progress-width', `${progress}%`); // Remove this line
+            progressBar.style.setProperty('--progress-width', `${progress}%`);
             const progressText = progressBar.querySelector('span') as HTMLElement;
             if (progressText) {
-                progressText.textContent = `${Math.floor(progress)}%`; // Remove this line
+                progressText.textContent = `${Math.floor(progress)}%`;
             }
         }
     
         this.updateHUD();
         this.renderer.render(this.scene, this.camera);
     }
+
+
 
     private updateBulletIndicators(): void {
         // Clear existing indicators
