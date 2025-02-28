@@ -1391,7 +1391,7 @@ this.scene.fog = new THREE.FogExp2(fogColor, fogDensity);
         this.scene.add(this.moon);
 
         // Create Mars with video texture
-        const marsGeometry = new THREE.SphereGeometry(800, 32, 32);
+        const marsGeometry = new THREE.SphereGeometry(1200, 32, 32);
 
         // Get the video element
         const marsVideo = document.getElementById('marsVideo') as HTMLVideoElement;
@@ -1539,7 +1539,7 @@ this.scene.add(this.nebulaSphere);
                 stars: 3, 
                 rotationSpeed: 0.0005,
                 texture: '/assets/planets/02.png',
-                rotationX: Math.PI / 4, // Example: 45° on X
+                rotationX: Math.PI / 1, // Example: 45° on X
                 rotationY: Math.PI / 2, // Example: 90° on Y
                 rotationZ: Math.PI / 6, // Example: 30° on Z
                 rotationSpeedX: 0.0002, // Example X speed
