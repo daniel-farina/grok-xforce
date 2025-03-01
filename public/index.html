@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Xforce Game developed with GrokAI</title>
-
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
     <style>
@@ -14,7 +13,7 @@
             overflow: hidden; 
             width: 100%; 
             height: 100%; 
-            background: url('/assets/xforce_splash.jpg') no-repeat center center fixed; 
+            background: url('/assets/xforce_splash.png') no-repeat center center fixed; 
             background-size: cover;
         }
 
@@ -36,7 +35,7 @@
 
         .progress-bar::before { 
             background: #00ff00; 
-            width: var(--bar-width);
+            width: var(--bar-width); /* Already correct in your CSS */
         }
 
         #crosshair { 
@@ -76,15 +75,15 @@
         }
 
         #compassContainer {
-            position: fixed;
-            bottom: 4px;
-            left: 4px;
-        }
-        #compass {
-            width: 100px;
-            height: 100px;
-            text-align: center;
-        }
+    position: fixed;
+    bottom: 4px;
+    left: 4px;
+}
+#compass {
+    width: 100px;
+    height: 100px;
+    text-align: center;
+}
         .direction {
             position: absolute;
             font-size: 20px;
@@ -134,12 +133,11 @@
             opacity: 1;
         }
     </style>
-</head>
+<script defer src="js/bundle.js"></script></head>
 <body>
     <div id="startPrompt">Press Start to Begin</div>
     <canvas id="renderCanvas"></canvas>
-    <div id="ammoCounter">Ammo: 30</div>
-    <div id="crosshair">+</div>
+    
     <div id="hud" class="fixed top-0 left-0 w-full flex justify-between items-start p-4 font-orbitron text-cyan-400 pointer-events-none z-10">
         <div class="flex flex-col gap-2">
             <div id="fastShotCounter" class="hud-item bg-black/70 border border-cyan-400 rounded p-2 shadow-inner shadow-cyan-500/30 text-shadow-md">
@@ -163,7 +161,7 @@
         <div class="flex gap-4">
             <div id="healthCounter" class="hud-item bg-black/70 border border-cyan-400 rounded p-2 shadow-inner shadow-cyan-500/30 text-shadow-md">
                 <span class="label uppercase font-bold text-sm">Shields</span>
-                <span class="value text-base ml-2">10</span>
+                <span class="value text-base ml-2"></span>
                 <div class="bar w-16 h-1.5 bg-gray-800 border border-cyan-400 relative overflow-hidden" style="--bar-width: 100%; background: #00ff00;"></div>
             </div>
             <div id="scoreCounter" class="hud-item bg-black/70 border border-cyan-400 rounded p-2 shadow-inner shadow-cyan-500/30 text-shadow-md">
@@ -250,12 +248,6 @@
             </select></label>
         </div>
     </div>
-    <a href="https://x.com/Daniel_Farinax" target="_blank" id="twitterLink" class="fixed bottom-4 right-4 bg-[#0a0f1f]/70 border border-cyan-400 rounded-full p-2 text-cyan-400 font-orbitron text-sm hover:bg-cyan-400 hover:text-[#0a0f1f] transition-colors shadow-[0_0_5px_#00ffff] z-20">
-        <svg class="w-6 h-6 inline-block mr-1" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
-        </svg>
-        @Daniel_Farinax
-    </a>
     <video id="nebulaVideo" hidden loop muted playsinline>
         <source src="/assets/nebula.mp4" type="video/mp4">
     </video>
@@ -268,6 +260,13 @@
     <video id="purplePlanetVideo" hidden loop muted playsinline>
         <source src="/assets/lava2.mp4" type="video/mp4">
     </video>
+
+    <a href="https://x.com/Daniel_Farinax" target="_blank" id="twitterLink" class="fixed bottom-4 right-4 bg-[#0a0f1f]/70 border border-cyan-400 rounded-full p-2 text-cyan-400 font-orbitron text-sm hover:bg-cyan-400 hover:text-[#0a0f1f] transition-colors shadow-[0_0_5px_#00ffff] z-20">
+        <svg class="w-6 h-6 inline-block mr-1" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+        </svg>
+        Follow @Daniel_Farinax
+    </a>
     <script type="module" src="/dist/app.js"></script>
 </body>
 </html>

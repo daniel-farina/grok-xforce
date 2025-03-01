@@ -30,6 +30,8 @@ interface Planet {
     rotationSpeedZ?: number; // Optional, defaults to 0
 }
 
+
+
 class PodRacingGame {
     private scene: THREE.Scene = new THREE.Scene();
     private camera: THREE.PerspectiveCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100000);
@@ -193,7 +195,6 @@ private baseFireRate: number = 100; // Default fire rate (store separately)
 private weavingTimers: Map<CANNON.Body, number> = new Map(); // Track weaving for each speedster
 
 private flySounds: HTMLAudioElement[] = [
-    new Audio('/assets/fly1.mp3'),
     new Audio('/assets/fly2.mp3'),
     new Audio('/assets/fly3.mp3')
 ];
@@ -202,7 +203,76 @@ private maxSimultaneousSounds: number = 5;
 
 private isIntroAudioPlaying: boolean = false;
 private hasIntroPlayed: boolean = false; // New flag to ensure it plays only once per game session
+private hasSetupDifficultyButtons: boolean = false; 
 
+private handleIntroEnded = () => {
+    this.isIntroAudioPlaying = false;
+    this.isIntroPlaying = false;
+    PodRacingGame.isIntroPlayingGlobally = false; // Reset global flag
+    console.log("Intro audio ended");
+};
+
+
+private isResumingAudio: boolean = false;
+private isStartingIntro: boolean = false; // Renamed for clarity
+private static isIntroPlayingGlobally: boolean = false;
+
+// In the PodRacingGame class
+public cleanupAudio(): void { // Changed from private to public
+    // Stop and disconnect spaceship engine oscillator
+    if (this.isEngineSoundStarted && this.spaceshipEngineOscillator) {
+        try {
+            this.spaceshipEngineOscillator.stop();
+            this.spaceshipEngineOscillator.disconnect();
+            this.spaceshipEngineFilter.disconnect();
+            this.spaceshipEngineGain.disconnect();
+            this.isEngineSoundStarted = false;
+        } catch (err) {
+            console.error("Failed to stop engine oscillator:", err);
+        }
+    }
+
+    // Pause and reset intro audio
+    if (this.introAudio) {
+        try {
+            this.introAudio.pause();
+            this.introAudio.currentTime = 0;
+            this.introAudio.removeEventListener('ended', this.handleIntroEnded);
+            this.isIntroAudioPlaying = false;
+            this.isIntroPlaying = false;
+            const introSource = this.audioContext.createMediaElementSource(this.introAudio);
+            introSource.disconnect();
+            this.introAudioGain.disconnect();
+        } catch (err) {
+            console.error("Failed to reset intro audio:", err);
+        }
+    }
+    PodRacingGame.isIntroPlayingGlobally = false; 
+
+    // Pause and reset background music
+    this.songs.forEach(song => {
+        try {
+            song.pause();
+            song.currentTime = 0;
+        } catch (err) {
+            console.error("Failed to reset background song:", err);
+        }
+    });
+
+    // Stop all active enemy sounds
+    this.activeEnemySounds.forEach((sound, body) => this.stopEnemySound(body));
+    this.activeEnemySounds.clear();
+
+    // Close AudioContext
+    if (this.audioContext) {
+        try {
+            this.audioContext.close();
+            console.log("AudioContext closed");
+        } catch (err) {
+            console.error("Failed to close AudioContext:", err);
+        }
+    }
+}
 
 private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[], lifetimes: number[] }[] = [];
     private nebulaColors = [0x0000ff, 0x800080, 0xff00ff, 0x00ff00]; // Blue, purple, pink, green
@@ -210,9 +280,17 @@ private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[],
     private purplePlanetVideoTexture: THREE.VideoTexture | null = null;
 
     constructor() {
+        console.log("New PodRacingGame instance created, ID:", Math.random().toString(36).substr(2, 9));
         this.initialize().then(() => {
             console.log("Game initialized");
-            this.baseFireRate = this.fireRate; // Store initial fire rate
+            this.baseFireRate = this.fireRate;
+            if (!this.hasSetupDifficultyButtons) {
+                this.setupDifficultyButtons();
+                this.hasSetupDifficultyButtons = true;
+            }
+            window.addEventListener('beforeunload', () => {
+                this.cleanupAudio();
+            });
         });
     }
 
@@ -223,13 +301,13 @@ private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[],
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setClearColor(0x000000, 1);
         this.world.gravity.set(0, 0, 0);
-
-        // Initialize AudioContext
+    
         this.audioContext = new AudioContext();
+    
 
         // Setup fly sounds
         this.flySounds.forEach(sound => {
-            sound.volume = 0.2;
+            sound.volume = 0.05;
             sound.loop = true;
         });
 
@@ -256,11 +334,8 @@ private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[],
         this.introAudioGain.gain.setValueAtTime(this.introAudioVolume, this.audioContext.currentTime);
         introSource.connect(this.introAudioGain);
         this.introAudioGain.connect(this.audioContext.destination);
-        this.introAudio.addEventListener('ended', () => {
-            this.isIntroAudioPlaying = false;
-            this.isIntroPlaying = false;
-            console.log("Intro audio ended");
-        });
+        this.introAudio.addEventListener('ended', this.handleIntroEnded);
+
 
         // Setup background music
         this.songs = [
@@ -371,7 +446,7 @@ private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[],
         this.scoreCounter = document.getElementById("scoreCounter") as HTMLElement;
         this.enemiesKilledCounter = document.getElementById("enemiesKilledCounter") as HTMLElement;
         this.countdownElement = document.getElementById("countdown") as HTMLElement;
-        this.fastShotCounter = document.getElementById("fastShotCounter") as HTMLElement; // Add this
+        this.fastShotCounter = document.getElementById("fastShotCounter") as HTMLElement;
         this.countdownMain = document.getElementById("countdownMain") as HTMLElement;
         this.countdownSub = document.getElementById("countdownSub") as HTMLElement;
         this.hud = document.getElementById("hud") as HTMLElement;
@@ -382,12 +457,10 @@ private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[],
         this.crosshair = document.getElementById("crosshair") as HTMLElement;
         this.startButton = document.getElementById("startButton") as HTMLElement;
         this.difficultyMenu = document.getElementById("difficultyMenu") as HTMLElement;
-        this.startPrompt = document.getElementById("startPrompt") as HTMLElement; // Add this line
+        this.startPrompt = document.getElementById("startPrompt") as HTMLElement;
         this.bulletIndicators = document.getElementById("bulletIndicators") as HTMLElement;
         this.progressBar = document.getElementById("progressBar") as HTMLElement;
         this.levelValue = document.getElementById("levelValue") as HTMLElement;
-        
-        
         // Add controls element
         const controlsElement = document.getElementById("controls") as HTMLElement;
         if (controlsElement) {
@@ -395,23 +468,23 @@ private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[],
         } else {
             console.error("Controls element not found");
         }
+                // Error checking
+                if (!this.countdownElement) console.error("countdown element not found");
+                if (!this.countdownMain) console.error("countdownMain element not found");
+                if (!this.countdownSub) console.error("countdownSub element not found");
+                if (!this.startPrompt) console.error("startPrompt element not found"); // Add this for debugging
+            
+        // Compass elements
+        this.compass = document.getElementById("compass") as HTMLElement;
+        this.compassN = document.getElementById("compassN") as HTMLElement;
+        this.compassE = document.getElementById("compassE") as HTMLElement;
+        this.compassS = document.getElementById("compassS") as HTMLElement;
+        this.compassW = document.getElementById("compassW") as HTMLElement;
     
-        // Error checking
-        if (!this.countdownElement) console.error("countdown element not found");
-        if (!this.countdownMain) console.error("countdownMain element not found");
-        if (!this.countdownSub) console.error("countdownSub element not found");
-        if (!this.startPrompt) console.error("startPrompt element not found"); // Add this for debugging
+        // Error checking (optional, for debugging)
+        if (!this.livesCounter) console.error("livesCounter (#healthCounter) not found");
     
-
-         // Add compass elements
-    this.compass = document.getElementById("compass") as HTMLElement;
-    this.compassN = document.getElementById("compassN") as HTMLElement;
-    this.compassE = document.getElementById("compassE") as HTMLElement;
-    this.compassS = document.getElementById("compassS") as HTMLElement;
-    this.compassW = document.getElementById("compassW") as HTMLElement;
-
-
-        this.updateHUD();
+        this.updateHUD(); // Ensure initial state is set here
     }
 
     private spawnSpeedsterShip(): void {
@@ -577,11 +650,19 @@ private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[],
     }
 
     private setupDifficultyButtons(): void {
+        console.log("setupDifficultyButtons called");
         const easyButton = document.getElementById("easyButton") as HTMLElement;
         const normalButton = document.getElementById("normalButton") as HTMLElement;
         const hardButton = document.getElementById("hardButton") as HTMLElement;
-
-        easyButton.addEventListener("click", () => {
+    
+        const removeListener = (button: HTMLElement, handler: () => void) => {
+            console.log(`Removing and adding listener for ${button.id}`);
+            button.removeEventListener("click", handler);
+            button.addEventListener("click", handler);
+        };
+    
+        const easyHandler = () => {
+            console.log("Easy difficulty selected");
             this.difficulty = 'easy';
             this.lives = 20;
             this.basePodSpeed = 25;
@@ -592,11 +673,13 @@ private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[],
             this.enemyFireRate = 1500;
             this.enemyBulletSpeed = 400;
             this.startGame();
-            this.startIntroAudio(); // Play intro here
+            this.startIntroAudio();
             this.songs[this.currentSongIndex].play().catch(err => console.error("Song playback failed:", err));
-        });
-
-        normalButton.addEventListener("click", () => {
+            this.updateHUD();
+        };
+    
+        const normalHandler = () => {
+            console.log("Normal difficulty selected");
             this.difficulty = 'normal';
             this.lives = 15;
             this.basePodSpeed = 40;
@@ -607,11 +690,13 @@ private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[],
             this.enemyFireRate = 1000;
             this.enemyBulletSpeed = 500;
             this.startGame();
-            this.startIntroAudio(); // Play intro here
+            this.startIntroAudio();
             this.songs[this.currentSongIndex].play().catch(err => console.error("Song playback failed:", err));
-        });
-
-        hardButton.addEventListener("click", () => {
+            this.updateHUD();
+        };
+    
+        const hardHandler = () => {
+            console.log("Hard difficulty selected");
             this.difficulty = 'hard';
             this.lives = 10;
             this.basePodSpeed = 60;
@@ -622,31 +707,46 @@ private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[],
             this.enemyFireRate = 700;
             this.enemyBulletSpeed = 600;
             this.startGame();
-            this.startIntroAudio(); // Play intro here
+            this.startIntroAudio();
             this.songs[this.currentSongIndex].play().catch(err => console.error("Song playback failed:", err));
-        });
+            this.updateHUD();
+        };
+    
+        removeListener(easyButton, easyHandler);
+        removeListener(normalButton, normalHandler);
+        removeListener(hardButton, hardHandler);
     }
 
     private startIntroAudio(): void {
-        if (this.hasIntroPlayed) {
-            console.log("Intro audio already played, skipping");
-            this.isIntroPlaying = true; // Proceed with animation
+        console.log("startIntroAudio called, hasIntroPlayed:", this.hasIntroPlayed, "isStartingIntro:", this.isStartingIntro, "isIntroPlayingGlobally:", PodRacingGame.isIntroPlayingGlobally);
+        if (PodRacingGame.isIntroPlayingGlobally || this.isStartingIntro || this.hasIntroPlayed) {
+            console.log("Intro skipped because already playing globally, starting, or has played");
+            this.isIntroPlaying = true;
             return;
         }
-
+    
+        PodRacingGame.isIntroPlayingGlobally = true;
+        this.isStartingIntro = true;
         if (this.audioContext.state === 'suspended') {
             this.audioContext.resume().then(() => {
                 console.log("AudioContext resumed for intro");
                 this.playIntro();
-            }).catch(err => console.error("Failed to resume AudioContext:", err));
+                this.isStartingIntro = false;
+            }).catch(err => {
+                console.error("Failed to resume AudioContext:", err);
+                this.isStartingIntro = false;
+                PodRacingGame.isIntroPlayingGlobally = false;
+            });
         } else {
             this.playIntro();
+            this.isStartingIntro = false;
         }
     }
 
     private playIntro(): void {
-        this.introAudio.pause(); // Ensure it’s stopped
-        this.introAudio.currentTime = 0; // Reset to start
+        console.log("playIntro called");
+        this.introAudio.pause();
+        this.introAudio.currentTime = 0;
         this.introAudio.play()
             .then(() => {
                 this.isIntroAudioPlaying = true;
@@ -656,9 +756,12 @@ private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[],
             })
             .catch(err => {
                 console.error("Intro audio playback failed:", err);
-                this.isIntroPlaying = true; // Proceed with animation if audio fails
+                this.isIntroPlaying = true;
+                this.isStartingIntro = false;
+                PodRacingGame.isIntroPlayingGlobally = false;
             });
     }
+
     private startGame(): void {
         this.difficultyMenu.style.display = "none";
         this.createScene().then(() => {
@@ -860,7 +963,6 @@ private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[],
             }
         });
     
-        this.setupDifficultyButtons();
     }
 
     // New helper method to show a prompt if pointer lock fails
@@ -1325,8 +1427,8 @@ private showPointerLockPrompt(): void {
     if (this.activeEnemySounds.size < this.maxSimultaneousSounds) {
         const soundIndex = Math.floor(this.rng() * this.flySounds.length);
         const flySound = this.flySounds[soundIndex].cloneNode(true) as HTMLAudioElement;
-        flySound.volume = 0.5; // Ensure cloned sound has volume
-        flySound.loop = true;
+        flySound.volume = 0.1; // Ensure cloned sound has volume
+        flySound.loop = false;
         flySound.play().catch(err => console.error("Failed to play fly sound:", err));
         this.activeEnemySounds.set(enemyBody, flySound);
     }
@@ -2443,7 +2545,7 @@ private animate(): void {
 
         if (distanceToPod < 12) {
             this.stopEnemySound(enemy.body);
-            lifeDelta -= 2;
+            lifeDelta -= 1;
             this.triggerHitParticles();
             this.removeEnemy(enemy, i);
         } else if (trackDistanceFromPod < -100) {
@@ -2512,7 +2614,7 @@ private animate(): void {
         for (let j = this.bullets.length - 1; j >= 0; j--) {
             const bullet = this.bullets[j];
             if (bullet.mesh.position.distanceTo(speedster.mesh.position) < 15) {
-                this.fastShotRounds = 100;
+                this.fastShotRounds = 300;
                 this.fireRate = this.baseFireRate / 3;
                 if (!speedster.mesh.userData.hasGrantedLives) {
                     lifeDelta += 10; // Speedster bonus
@@ -2823,35 +2925,30 @@ private animate(): void {
     }
 
     private updateHUD(): void {
-        const healthCounter = document.getElementById("healthCounter") as HTMLElement;
-        const scoreCounter = document.getElementById("scoreCounter") as HTMLElement;
-        const enemiesKilledCounter = document.getElementById("enemiesKilledCounter") as HTMLElement;
-        const progressBar = document.getElementById("progressBar") as HTMLElement;
-        const fastShotCounter = document.getElementById("fastShotCounter") as HTMLElement; // Add this
-        // Explicitly set level
         this.levelValue.textContent = `${this.level}`;
     
-        const healthValue = healthCounter.querySelector(".value") as HTMLElement;
-        const healthBar = healthCounter.querySelector(".bar") as HTMLElement;
-        const scoreValue = scoreCounter.querySelector(".value") as HTMLElement;
-        const enemiesKilledValue = enemiesKilledCounter.querySelector(".value") as HTMLElement;
-        const progressBarElement = progressBar.querySelector(".progress-bar") as HTMLElement;
-        const progressValue = progressBar.querySelector(".value:not(#levelValue)") as HTMLElement; // Select the percentage span
-        const fastShotValue = fastShotCounter.querySelector(".value") as HTMLElement; // Add this
-
+        // Use class property livesCounter instead of re-fetching
+        const healthValue = this.livesCounter.querySelector(".value") as HTMLElement;
+        const healthBar = this.livesCounter.querySelector(".bar") as HTMLElement;
+        const scoreValue = this.scoreCounter.querySelector(".value") as HTMLElement;
+        const enemiesKilledValue = this.enemiesKilledCounter.querySelector(".value") as HTMLElement;
+        const progressBarElement = this.progressBar.querySelector(".progress-bar") as HTMLElement;
+        const progressValue = this.progressBar.querySelector(".value:not(#levelValue)") as HTMLElement;
+        const fastShotValue = this.fastShotCounter.querySelector(".value") as HTMLElement;
+    
+        const maxLives = this.difficulty === 'easy' ? 20 : this.difficulty === 'normal' ? 15 : 10;
         healthValue.textContent = `${this.lives}`;
-        const shieldPercent = (this.lives / (this.difficulty === 'easy' ? 15 : this.difficulty === 'normal' ? 10 : 5)) * 100;
+        const shieldPercent = (this.lives / maxLives) * 100;
         healthBar.style.setProperty('--bar-width', `${shieldPercent}%`);
         healthBar.style.background = shieldPercent > 50 ? '#00ff00' : shieldPercent > 25 ? '#ffff00' : '#ff0000';
     
         scoreValue.textContent = `${Math.floor(this.score)}`;
         enemiesKilledValue.textContent = `${this.enemiesKilled}`;
-    fastShotValue.textContent = `${this.fastShotRounds}`; // Display remaining fast shots
-
-        // Update progress bar and percentage
+        fastShotValue.textContent = `${this.fastShotRounds}`;
+    
         if (this.trackPath) {
             const progress = (this.podDistance / this.trackPath.getLength()) * 100;
-            progressValue.textContent = `${Math.floor(progress)}%`; // Percentage in its own span
+            progressValue.textContent = `${Math.floor(progress)}%`;
             progressBarElement.style.setProperty('--bar-width', `${progress}%`);
         } else {
             progressValue.textContent = "0%";
@@ -2907,6 +3004,21 @@ private animate(): void {
     }
 }
 
-window.addEventListener("DOMContentLoaded", () => {
-    new PodRacingGame();
-});
+let gameInstance: PodRacingGame | null = null;
+
+function initializeGame() {
+    if (gameInstance) {
+        console.log("Cleaning up previous game instance");
+        gameInstance.cleanupAudio();
+    }
+    gameInstance = new PodRacingGame();
+}
+
+// Ensure this runs only once
+if (!window.hasOwnProperty('gameInitialized')) {
+    window.addEventListener("DOMContentLoaded", () => {
+        console.log("DOMContentLoaded fired");
+        initializeGame();
+    });
+    (window as any).gameInitialized = true; // Flag to prevent re-run
+}
