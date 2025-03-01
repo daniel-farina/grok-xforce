@@ -216,6 +216,8 @@ private handleIntroEnded = () => {
 private isResumingAudio: boolean = false;
 private isStartingIntro: boolean = false; // Renamed for clarity
 private static isIntroPlayingGlobally: boolean = false;
+private speedDisplay!: HTMLElement; // Add this to your class properties
+
 
 // In the PodRacingGame class
 public cleanupAudio(): void { // Changed from private to public
@@ -447,6 +449,7 @@ private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[],
         this.enemiesKilledCounter = document.getElementById("enemiesKilledCounter") as HTMLElement;
         this.countdownElement = document.getElementById("countdown") as HTMLElement;
         this.fastShotCounter = document.getElementById("fastShotCounter") as HTMLElement;
+        this.speedDisplay = document.getElementById("speedDisplay") as HTMLElement; //
         this.countdownMain = document.getElementById("countdownMain") as HTMLElement;
         this.countdownSub = document.getElementById("countdownSub") as HTMLElement;
         this.hud = document.getElementById("hud") as HTMLElement;
@@ -1631,7 +1634,7 @@ this.scene.fog = new THREE.FogExp2(fogColor, fogDensity);
         // Add this in createScene, after the stars
 const textureLoaderMilky = new THREE.TextureLoader();
 // Load a Milky Way-style texture (you’ll need an asset, or use a placeholder)
-const milkyWayTexture = textureLoaderMilky.load('/assets/milkyway2.png', (texture) => {
+const milkyWayTexture = textureLoaderMilky.load('/assets/milkyway2.jpg', (texture) => {
     texture.wrapS = THREE.RepeatWrapping;
     texture.wrapT = THREE.RepeatWrapping;
     texture.repeat.set(1, 1);
@@ -1865,45 +1868,78 @@ this.scene.add(this.nebulaSphere);
 
     // Replace the explosion sound in triggerEnemyExplosion
     private triggerEnemyExplosion(position: THREE.Vector3): void {
-        const explosionParticleCount = 100;
+        const explosionParticleCount = 200; // Increase for more density
         const explosionGeometry = new THREE.BufferGeometry();
         const explosionPositions = new Float32Array(explosionParticleCount * 3);
         const velocities: THREE.Vector3[] = [];
         const lifetimes: number[] = [];
+        const sizes = new Float32Array(explosionParticleCount); // Add size variation
         const duration = 1.5;
-
-        for (let i = 0; i < explosionPositions.length; i += 3) {
-            explosionPositions[i] = position.x;
-            explosionPositions[i + 1] = position.y;
-            explosionPositions[i + 2] = position.z;
-
+    
+        // Initialize particles
+        for (let i = 0; i < explosionParticleCount; i++) {
+            explosionPositions[i * 3] = position.x;
+            explosionPositions[i * 3 + 1] = position.y;
+            explosionPositions[i * 3 + 2] = position.z;
+    
+            // More realistic velocity distribution (radial burst with some randomness)
             const velocity = new THREE.Vector3(
-                (this.rng() - 0.5) * 20,
-                (this.rng() - 0.5) * 20,
-                (this.rng() - 0.5) * 20
-            ).normalize().multiplyScalar(50 + this.rng() * 20);
-
+                (this.rng() - 0.5) * 40,
+                (this.rng() - 0.5) * 40,
+                (this.rng() - 0.5) * 40
+            ).normalize().multiplyScalar(50 + this.rng() * 30); // Larger range for dynamic spread
             velocities.push(velocity);
-            lifetimes.push(duration);
+    
+            lifetimes.push(duration + this.rng() * 0.5); // Vary lifetime for smoother fade
+            sizes[i] = 5 + this.rng() * 10; // Vary particle size
         }
-
+    
         explosionGeometry.setAttribute('position', new THREE.BufferAttribute(explosionPositions, 3));
-        const explosionMaterial = new THREE.PointsMaterial({
-            color: 0xff5500,
-            size: 4,
+        explosionGeometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+    
+        // Custom shader material
+        const explosionMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                color: { value: new THREE.Color(0xff5500) },
+                time: { value: 0 },
+                duration: { value: duration }
+            },
+            vertexShader: `
+                attribute float size;
+                varying vec3 vPosition;
+                varying float vLifetime;
+                uniform float time;
+                uniform float duration;
+                void main() {
+                    vPosition = position;
+                    vLifetime = 1.0 - (time / duration); // Pass lifetime to fragment
+                    gl_PointSize = size * vLifetime; // Shrink over time
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform vec3 color;
+                varying vec3 vPosition;
+                varying float vLifetime;
+                void main() {
+                    vec2 coord = gl_PointCoord - vec2(0.5); // Center at 0,0
+                    float dist = length(coord);
+                    if (dist > 0.5) discard; // Circular shape
+                    float alpha = smoothstep(0.5, 0.0, dist) * vLifetime; // Soft edges and fade
+                    gl_FragColor = vec4(color, alpha);
+                }
+            `,
             transparent: true,
-            opacity: 1,
             blending: THREE.AdditiveBlending
         });
-        explosionMaterial.color.setHSL(this.rng() * 0.1 + 0.05, 1, 0.5);
-
+    
         const particles = new THREE.Points(explosionGeometry, explosionMaterial);
         this.scene.add(particles);
         this.explosionInstances.push({ particles, velocities, lifetimes, duration });
-
-        // Clone the explosion sound to allow overlapping plays
+    
+        // Play explosion sound (unchanged)
         const explosionClone = this.explosionSound.cloneNode(true) as HTMLAudioElement;
-        explosionClone.volume = 0.5; // Adjust volume as needed
+        explosionClone.volume = 0.5;
         explosionClone.play().catch(err => console.error("Explosion sound playback failed:", err));
     }
 
@@ -2803,21 +2839,21 @@ private animate(): void {
         const instance = this.explosionInstances[i];
         const positions = instance.particles.geometry.attributes.position.array as Float32Array;
         let allExpired = true;
-
+    
+        // Update time uniform
+        const material = instance.particles.material as THREE.ShaderMaterial;
+        material.uniforms.time.value += deltaTime;
+    
         for (let j = 0; j < positions.length; j += 3) {
             if (instance.lifetimes[j / 3] > 0) {
                 positions[j] += instance.velocities[j / 3].x * deltaTime;
                 positions[j + 1] += instance.velocities[j / 3].y * deltaTime;
                 positions[j + 2] += instance.velocities[j / 3].z * deltaTime;
-
                 instance.lifetimes[j / 3] -= deltaTime;
                 allExpired = false;
-
-                const material = instance.particles.material as THREE.PointsMaterial;
-                material.opacity = Math.max(0, instance.lifetimes[j / 3] / instance.duration);
             }
         }
-
+    
         instance.particles.geometry.attributes.position.needsUpdate = true;
         if (allExpired) {
             this.scene.remove(instance.particles);
@@ -2954,6 +2990,15 @@ private animate(): void {
             progressValue.textContent = "0%";
             progressBarElement.style.setProperty('--bar-width', "0%");
         }
+
+         // Add speed display update
+    const speedValue = this.speedDisplay.querySelector(".value") as HTMLElement;
+    if (speedValue) {
+        speedValue.textContent = `${Math.floor(this.podSpeed)} m/s`;
+        speedValue.style.color = this.podSpeed > 100 ? '#ff5555' : this.podSpeed > 50 ? '#ffff55' : '#55ff55';
+    } else {
+        console.error("Speed value element not found in speedDisplay");
+    }
     
         // Compass update (unchanged)
         if (this.raceStarted && this.trackPath) {
