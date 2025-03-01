@@ -217,8 +217,6 @@ private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[],
     }
 
     private async initialize(): Promise<void> {
-
-
         this.canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
         if (!this.canvas) throw new Error("Canvas not found");
         this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
@@ -226,169 +224,146 @@ private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[],
         this.renderer.setClearColor(0x000000, 1);
         this.world.gravity.set(0, 0, 0);
 
-         // Initialize fly sounds
-    this.flySounds.forEach(sound => {
-        sound.volume = 0.2; // Adjust as needed
-        sound.loop = true; // Loop the fly sound while enemy is active
-    });
+        // Initialize AudioContext
+        this.audioContext = new AudioContext();
+
+        // Setup fly sounds
+        this.flySounds.forEach(sound => {
+            sound.volume = 0.2;
+            sound.loop = true;
+        });
 
         // Setup spaceship engine sound
-    this.audioContext = new AudioContext();
+        this.spaceshipEngineOscillator = this.audioContext.createOscillator();
+        this.spaceshipEngineGain = this.audioContext.createGain();
+        this.spaceshipEngineFilter = this.audioContext.createBiquadFilter();
+        this.spaceshipEngineOscillator.type = 'sawtooth';
+        this.spaceshipEngineOscillator.frequency.setValueAtTime(70, this.audioContext.currentTime);
+        this.spaceshipEngineGain.gain.setValueAtTime(0.0025, this.audioContext.currentTime);
+        this.spaceshipEngineFilter.type = 'lowpass';
+        this.spaceshipEngineFilter.frequency.setValueAtTime(2000, this.audioContext.currentTime);
+        this.spaceshipEngineFilter.Q.setValueAtTime(1, this.audioContext.currentTime);
+        this.spaceshipEngineOscillator.connect(this.spaceshipEngineFilter);
+        this.spaceshipEngineFilter.connect(this.spaceshipEngineGain);
+        this.spaceshipEngineGain.connect(this.audioContext.destination);
+        this.isEngineSoundStarted = false;
 
-    this.spaceshipEngineOscillator = this.audioContext.createOscillator();
-    this.spaceshipEngineGain = this.audioContext.createGain();
-    this.spaceshipEngineFilter = this.audioContext.createBiquadFilter();
+        // Setup intro audio (initialize but don’t play yet)
+        this.introAudio = new Audio('/assets/intro.mp3');
+        this.introAudio.volume = this.introAudioVolume;
+        const introSource = this.audioContext.createMediaElementSource(this.introAudio);
+        this.introAudioGain = this.audioContext.createGain();
+        this.introAudioGain.gain.setValueAtTime(this.introAudioVolume, this.audioContext.currentTime);
+        introSource.connect(this.introAudioGain);
+        this.introAudioGain.connect(this.audioContext.destination);
+        this.introAudio.addEventListener('ended', () => {
+            this.isIntroAudioPlaying = false;
+            this.isIntroPlaying = false;
+            console.log("Intro audio ended");
+        });
 
-    // Oscillator settings
-    this.spaceshipEngineOscillator.type = 'sawtooth';
-    this.spaceshipEngineOscillator.frequency.setValueAtTime(70, this.audioContext.currentTime);
-    this.spaceshipEngineGain.gain.setValueAtTime(0.0025, this.audioContext.currentTime);
+        // Setup background music
+        this.songs = [
+            new Audio('/assets/music1.mp3'),
+            // new Audio('/assets/music2.mp3'),
+            // new Audio('/assets/music3.mp3')
+        ];
+        this.backgroundMusicGain = this.audioContext.createGain();
+        this.backgroundMusicGain.gain.setValueAtTime(this.backgroundMusicVolume, this.audioContext.currentTime);
+        this.backgroundMusicGain.connect(this.audioContext.destination);
 
-    // Filter settings
-    this.spaceshipEngineFilter.type = 'lowpass';
-    this.spaceshipEngineFilter.frequency.setValueAtTime(2000, this.audioContext.currentTime); // Default cutoff
-    this.spaceshipEngineFilter.Q.setValueAtTime(1, this.audioContext.currentTime); // Resonance
+        this.songs.forEach((song) => {
+            const source = this.audioContext.createMediaElementSource(song);
+            source.connect(this.backgroundMusicGain);
+            song.addEventListener('ended', () => this.playNextBackgroundSong());
+        });
+        this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
 
-    // Connect: Oscillator -> Filter -> Gain -> Destination
-    this.spaceshipEngineOscillator.connect(this.spaceshipEngineFilter);
-    this.spaceshipEngineFilter.connect(this.spaceshipEngineGain);
-    this.spaceshipEngineGain.connect(this.audioContext.destination);
-
-    this.isEngineSoundStarted = false; 
-
-   // Setup intro audio (initialize but don’t play yet)
-   this.introAudio = new Audio('/assets/intro.mp3');
-   this.introAudio.volume = this.introAudioVolume;
-   const introSource = this.audioContext.createMediaElementSource(this.introAudio);
-   this.introAudioGain = this.audioContext.createGain();
-   this.introAudioGain.gain.setValueAtTime(this.introAudioVolume, this.audioContext.currentTime);
-   introSource.connect(this.introAudioGain);
-   this.introAudioGain.connect(this.audioContext.destination);
-   this.introAudio.addEventListener('ended', () => {
-       this.isIntroAudioPlaying = false;
-       this.isIntroPlaying = false;
-       console.log("Intro audio ended");
-   });
-
-
-
-   // Song randomization
-   this.songs = [
-    new Audio('/assets/music1.mp3'),
-    // new Audio('/assets/music2.mp3'),
-    // new Audio('/assets/music3.mp3')
-];
-this.backgroundMusicGain = this.audioContext.createGain();
-this.backgroundMusicGain.gain.setValueAtTime(this.backgroundMusicVolume, this.audioContext.currentTime);
-this.backgroundMusicGain.connect(this.audioContext.destination);
-
-// Helper function to play a random song
-const playRandomSong = () => {
-    let newIndex;
-    do {
-        newIndex = Math.floor(Math.random() * this.songs.length);
-    } while (newIndex === this.currentSongIndex && this.songs.length > 1); // Avoid repeat unless only one song
-    this.currentSongIndex = newIndex;
-    this.songs[this.currentSongIndex].play().catch(err => console.error("Song playback failed:", err));
-};
-
-this.songs.forEach((song) => {
-    const source = this.audioContext.createMediaElementSource(song);
-    source.connect(this.backgroundMusicGain);
-    song.addEventListener('ended', () => {
-        playRandomSong(); // Play a random song when the current one ends
-    });
-});
-
-// Start with a random song
-this.currentSongIndex = Math.floor(Math.random() * this.songs.length);
-    
-    
         this.explosionSound = new Audio('/assets/explosion.mp3');
 
+        // Load shot and watchout sounds (unchanged)
+        this.shotSounds = [
+            new Audio('/assets/audio/shot/another_hit.mp3'),
+            new Audio('/assets/audio/shot/direc_hit.mp3'),
+            new Audio('/assets/audio/shot/dont_let_up.mp3'),
+            new Audio('/assets/audio/shot/great_shot.mp3'),
+            new Audio('/assets/audio/shot/keep_firing.mp3'),
+            new Audio('/assets/audio/shot/watch_those_Asteroids.mp3'),
+            new Audio('/assets/audio/shot/we_got_more_incoming.mp3'),
+            new Audio('/assets/audio/shot/you_doing_great.mp3')
+        ];
+        this.shotSounds.forEach(sound => sound.volume = 0.5);
 
-
-
-     // Load shot sounds for hitting enemies
-     this.shotSounds = [
-        new Audio('/assets/audio/shot/another_hit.mp3'),
-        new Audio('/assets/audio/shot/direc_hit.mp3'),
-        new Audio('/assets/audio/shot/dont_let_up.mp3'),
-        new Audio('/assets/audio/shot/great_shot.mp3'),
-        new Audio('/assets/audio/shot/keep_firing.mp3'),
-        new Audio('/assets/audio/shot/watch_those_Asteroids.mp3'),
-        new Audio('/assets/audio/shot/we_got_more_incoming.mp3'),
-        new Audio('/assets/audio/shot/you_doing_great.mp3')
-    ];
-    this.shotSounds.forEach(sound => sound.volume = 0.5);
-
-    // Load watchout sounds for enemy spawns
-    this.watchoutSounds = [
-        new Audio('/assets/audio/watchout/fire_at_will.mp3'),
-        new Audio('/assets/audio/watchout/keep_nose_up.mp3'),
-        new Audio('/assets/audio/watchout/keep_us_moving.mp3'),
-        new Audio('/assets/audio/watchout/look_out_enemy_12_oclock.mp3'),
-        new Audio('/assets/audio/watchout/stay_focus.mp3'),
-        new Audio('/assets/audio/watchout/stay_sharp_they_are_closing_in.mp3'),
-        new Audio('/assets/audio/watchout/they_are_not_make_easy.mp3'),
-        new Audio('/assets/audio/watchout/watch_for_those_asteroids.mp3'),
-        new Audio('/assets/audio/watchout/we_cant_stay_Still.mp3'),
-        new Audio('/assets/audio/watchout/we_got_to_take_them_down.mp3')
-    ];
-    this.watchoutSounds.forEach(sound => sound.volume = 0.5);
-
+        this.watchoutSounds = [
+            new Audio('/assets/audio/watchout/fire_at_will.mp3'),
+            new Audio('/assets/audio/watchout/keep_nose_up.mp3'),
+            new Audio('/assets/audio/watchout/keep_us_moving.mp3'),
+            new Audio('/assets/audio/watchout/look_out_enemy_12_oclock.mp3'),
+            new Audio('/assets/audio/watchout/stay_focus.mp3'),
+            new Audio('/assets/audio/watchout/stay_sharp_they_are_closing_in.mp3'),
+            new Audio('/assets/audio/watchout/they_are_not_make_easy.mp3'),
+            new Audio('/assets/audio/watchout/watch_for_those_asteroids.mp3'),
+            new Audio('/assets/audio/watchout/we_cant_stay_Still.mp3'),
+            new Audio('/assets/audio/watchout/we_got_to_take_them_down.mp3')
+        ];
+        this.watchoutSounds.forEach(sound => sound.volume = 0.5);
 
         this.alertSounds = [];
-        this.audioContext = new AudioContext();
-    
         this.assignDomElements();
         this.setupInput();
         this.setupControls();
-    
+
         this.countdownElement.style.display = "none";
         this.crosshair.style.display = "none";
         this.startButton.style.display = "none";
         this.difficultyMenu.style.display = "block";
-        this.startPrompt.style.display = "none"; // Hide initially
-        
+        this.startPrompt.style.display = "none";
+
         const textureLoader = new THREE.TextureLoader();
-        this.asteroidTexture = await textureLoader.loadAsync('/assets/asteroid.jpg')
-        .then(texture => {
+        this.asteroidTexture = await textureLoader.loadAsync('/assets/asteroid.jpg').then(texture => {
             console.log("Asteroid texture loaded successfully");
             return texture;
-        })
-        .catch(err => {
+        }).catch(err => {
             console.error("Failed to load asteroid texture:", err);
             return null;
         });
         this.metalTexture = await textureLoader.loadAsync('/assets/metal.png').catch(() => null);
-    
-// Enemy video texture with safety check
-const enemyVideo = document.getElementById('enemyVideo') as HTMLVideoElement;
-if (!enemyVideo) {
-    console.error("Enemy video element not found in DOM");
-    this.enemyVideoTexture = null; // Fallback to null or use metalTexture later
-} else {
-    enemyVideo.play().catch(err => console.error("Enemy video playback failed:", err));
-    this.enemyVideoTexture = new THREE.VideoTexture(enemyVideo);
-    this.enemyVideoTexture.minFilter = THREE.LinearFilter;
-    this.enemyVideoTexture.magFilter = THREE.LinearFilter;
-    this.enemyVideoTexture.format = THREE.RGBFormat;
-}
 
- // Purple planet video texture
- const purplePlanetVideo = document.getElementById('purplePlanetVideo') as HTMLVideoElement;
- if (!purplePlanetVideo) {
-     console.error("Purple planet video element not found in DOM");
-     this.purplePlanetVideoTexture = null;
- } else {
-     purplePlanetVideo.play().catch(err => console.error("Purple planet video playback failed:", err));
-     this.purplePlanetVideoTexture = new THREE.VideoTexture(purplePlanetVideo);
-     this.purplePlanetVideoTexture.minFilter = THREE.LinearFilter;
-     this.purplePlanetVideoTexture.magFilter = THREE.LinearFilter;
-     this.purplePlanetVideoTexture.format = THREE.RGBFormat;
- }
+        // Video textures (unchanged)
+        const enemyVideo = document.getElementById('enemyVideo') as HTMLVideoElement;
+        if (!enemyVideo) {
+            console.error("Enemy video element not found in DOM");
+            this.enemyVideoTexture = null;
+        } else {
+            enemyVideo.play().catch(err => console.error("Enemy video playback failed:", err));
+            this.enemyVideoTexture = new THREE.VideoTexture(enemyVideo);
+            this.enemyVideoTexture.minFilter = THREE.LinearFilter;
+            this.enemyVideoTexture.magFilter = THREE.LinearFilter;
+            this.enemyVideoTexture.format = THREE.RGBFormat;
+        }
 
+        const purplePlanetVideo = document.getElementById('purplePlanetVideo') as HTMLVideoElement;
+        if (!purplePlanetVideo) {
+            console.error("Purple planet video element not found in DOM");
+            this.purplePlanetVideoTexture = null;
+        } else {
+            purplePlanetVideo.play().catch(err => console.error("Purple planet video playback failed:", err));
+            this.purplePlanetVideoTexture = new THREE.VideoTexture(purplePlanetVideo);
+            this.purplePlanetVideoTexture.minFilter = THREE.LinearFilter;
+            this.purplePlanetVideoTexture.magFilter = THREE.LinearFilter;
+            this.purplePlanetVideoTexture.format = THREE.RGBFormat;
+        }
+    }
+
+    private playNextBackgroundSong(): void {
+        let newIndex;
+        do {
+            newIndex = Math.floor(Math.random() * this.songs.length);
+        } while (newIndex === this.currentSongIndex && this.songs.length > 1);
+        this.currentSongIndex = newIndex;
+        this.songs[this.currentSongIndex].currentTime = 0;
+        this.songs[this.currentSongIndex].play()
+            .catch(err => console.error("Background music playback failed:", err));
     }
     
     private assignDomElements(): void {
@@ -605,7 +580,7 @@ if (!enemyVideo) {
         const easyButton = document.getElementById("easyButton") as HTMLElement;
         const normalButton = document.getElementById("normalButton") as HTMLElement;
         const hardButton = document.getElementById("hardButton") as HTMLElement;
-    
+
         easyButton.addEventListener("click", () => {
             this.difficulty = 'easy';
             this.lives = 20;
@@ -617,9 +592,10 @@ if (!enemyVideo) {
             this.enemyFireRate = 1500;
             this.enemyBulletSpeed = 400;
             this.startGame();
+            this.startIntroAudio(); // Play intro here
             this.songs[this.currentSongIndex].play().catch(err => console.error("Song playback failed:", err));
         });
-    
+
         normalButton.addEventListener("click", () => {
             this.difficulty = 'normal';
             this.lives = 15;
@@ -631,10 +607,10 @@ if (!enemyVideo) {
             this.enemyFireRate = 1000;
             this.enemyBulletSpeed = 500;
             this.startGame();
+            this.startIntroAudio(); // Play intro here
             this.songs[this.currentSongIndex].play().catch(err => console.error("Song playback failed:", err));
-
         });
-    
+
         hardButton.addEventListener("click", () => {
             this.difficulty = 'hard';
             this.lives = 10;
@@ -646,15 +622,30 @@ if (!enemyVideo) {
             this.enemyFireRate = 700;
             this.enemyBulletSpeed = 600;
             this.startGame();
+            this.startIntroAudio(); // Play intro here
             this.songs[this.currentSongIndex].play().catch(err => console.error("Song playback failed:", err));
-
         });
     }
-    
-
 
     private startIntroAudio(): void {
-        this.introAudio.pause(); // Ensure it's stopped
+        if (this.hasIntroPlayed) {
+            console.log("Intro audio already played, skipping");
+            this.isIntroPlaying = true; // Proceed with animation
+            return;
+        }
+
+        if (this.audioContext.state === 'suspended') {
+            this.audioContext.resume().then(() => {
+                console.log("AudioContext resumed for intro");
+                this.playIntro();
+            }).catch(err => console.error("Failed to resume AudioContext:", err));
+        } else {
+            this.playIntro();
+        }
+    }
+
+    private playIntro(): void {
+        this.introAudio.pause(); // Ensure it’s stopped
         this.introAudio.currentTime = 0; // Reset to start
         this.introAudio.play()
             .then(() => {
@@ -665,10 +656,9 @@ if (!enemyVideo) {
             })
             .catch(err => {
                 console.error("Intro audio playback failed:", err);
-                this.isIntroPlaying = true; // Proceed with animation even if audio fails
+                this.isIntroPlaying = true; // Proceed with animation if audio fails
             });
     }
-
     private startGame(): void {
         this.difficultyMenu.style.display = "none";
         this.createScene().then(() => {
@@ -678,12 +668,9 @@ if (!enemyVideo) {
                 this.isEngineSoundStarted = true;
             }
         });
-        // Start background music only if not already playing
-        if (!this.songs[this.currentSongIndex].currentTime) {
-            this.songs[this.currentSongIndex].play().catch(err => console.error("Background music playback failed:", err));
-        }
         window.addEventListener('resize', () => this.handleResize());
     }
+
 
     private restartGame(): void {
         this.activeEnemySounds.forEach((sound, body) => this.stopEnemySound(body));
