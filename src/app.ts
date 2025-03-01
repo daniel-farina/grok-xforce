@@ -219,6 +219,16 @@ private static isIntroPlayingGlobally: boolean = false;
 private speedDisplay!: HTMLElement; // Add this to your class properties
 
 
+private hyperBoostCounter!: HTMLElement; // UI element
+private hyperBoosts: number = 5; // Starting with 3 boosts
+private hyperBoostSound!: HTMLAudioElement; // Sound effect
+private isHyperBoostActive: boolean = false; // Track active state
+private hyperBoostStartDistance: number = 0; // Distance when activated
+private hyperBoostDuration: number = 0.2; // 10% of track length
+private normalSpeed: number = 0; // Store normal speed before boost
+private shieldMesh!: THREE.Mesh; // Visual shield effect
+
+
 // In the PodRacingGame class
 public cleanupAudio(): void { // Changed from private to public
     // Stop and disconnect spaceship engine oscillator
@@ -297,6 +307,7 @@ private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[],
     }
 
     private async initialize(): Promise<void> {
+
         this.canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
         if (!this.canvas) throw new Error("Canvas not found");
         this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
@@ -430,6 +441,21 @@ private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[],
             this.purplePlanetVideoTexture.magFilter = THREE.LinearFilter;
             this.purplePlanetVideoTexture.format = THREE.RGBFormat;
         }
+
+        this.hyperBoostSound = new Audio('/assets/lightspeed.mp3');
+        this.hyperBoostSound.volume = 0.3;
+
+        // Initialize shield mesh (hidden by default)
+        const shieldGeometry = new THREE.SphereGeometry(10, 32, 32);
+        const shieldMaterial = new THREE.MeshBasicMaterial({
+            color: 0x00ffff,
+            transparent: true,
+            opacity: 0.3,
+            blending: THREE.AdditiveBlending
+        });
+        this.shieldMesh = new THREE.Mesh(shieldGeometry, shieldMaterial);
+        this.shieldMesh.visible = false;
+        this.scene.add(this.shieldMesh);
     }
 
     private playNextBackgroundSong(): void {
@@ -486,6 +512,12 @@ private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[],
     
         // Error checking (optional, for debugging)
         if (!this.livesCounter) console.error("livesCounter (#healthCounter) not found");
+
+
+        this.fastShotCounter = document.getElementById("fastShotCounter") as HTMLElement;
+        this.speedDisplay = document.getElementById("speedDisplay") as HTMLElement;
+        this.hyperBoostCounter = document.getElementById("hyperBoostCounter") as HTMLElement; // Add this
+        if (!this.hyperBoostCounter) console.error("hyperBoostCounter element not found");        
     
         this.updateHUD(); // Ensure initial state is set here
     }
@@ -779,6 +811,9 @@ private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[],
 
 
     private restartGame(): void {
+        this.hyperBoosts = 3;
+        this.isHyperBoostActive = false;
+        this.shieldMesh.visible = false;
         this.activeEnemySounds.forEach((sound, body) => this.stopEnemySound(body));
         this.activeEnemySounds.clear();
         this.lives = 10; // Reset to initial lives based on difficulty could be added here
@@ -808,10 +843,31 @@ private speedsterParticles: { points: THREE.Points, velocities: THREE.Vector3[],
         });
     }
 
+    private activateHyperBoost(): void {
+        this.hyperBoosts--;
+        this.isHyperBoostActive = true;
+        this.hyperBoostStartDistance = this.podDistance;
+        this.normalSpeed = this.podSpeed; // Store current speed
+        this.podSpeed *= 15; // 5x speed increase
+        this.shieldMesh.visible = true; // Show shield
+    
+        // Play sound
+        const soundClone = this.hyperBoostSound.cloneNode(true) as HTMLAudioElement;
+        soundClone.volume = 0.5;
+        soundClone.play().catch(err => console.error("Hyper Boost sound playback failed:", err));
+    
+        this.updateHUD();
+    }
+
     private setupInput(): void {
         document.addEventListener("keydown", (event) => {
             if (this.isPaused && event.keyCode !== 27 && event.keyCode !== 82) return; // Allow Esc and R through
             switch (event.keyCode) {
+                case 88: // 'X' key
+                if (this.raceStarted && !this.isHyperBoostActive && this.hyperBoosts > 0) {
+                    this.activateHyperBoost();
+                }
+                break;
                 case 65: this.moveRight = true; break;
                 case 68: this.moveLeft = true; break;
                 case 87: this.moveUp = true; break;
@@ -2062,6 +2118,8 @@ private animate(): void {
     this.world.step(1 / 60);
     const deltaTime = 1 / 60;
 
+    
+
     if (this.difficultyMenu.style.display === "block") {
         this.renderer.render(this.scene, this.camera);
         return;
@@ -2140,6 +2198,20 @@ private animate(): void {
         return;
     }
 
+    if (this.isHyperBoostActive) {
+        // Update shield position
+        this.shieldMesh.position.copy(this.pod.position);
+        this.shieldMesh.rotation.y += deltaTime; // Gentle rotation for effect
+
+        const distanceTraveled = this.podDistance - this.hyperBoostStartDistance;
+        const trackLength = this.trackPath.getLength();
+        if (distanceTraveled >= trackLength * this.hyperBoostDuration) {
+            this.isHyperBoostActive = false;
+            this.podSpeed = this.normalSpeed; // Revert to normal speed
+            this.shieldMesh.visible = false; // Hide shield
+        }
+    }
+
     this.survivalTime += deltaTime;
     this.score += this.podSpeed * deltaTime;
 
@@ -2158,6 +2230,7 @@ private animate(): void {
             return;
         }
         lifeDelta += this.difficulty === 'easy' ? 7 : this.difficulty === 'normal' ? 5 : 3;
+        this.hyperBoosts++; // Add one Hyper Boost per level
         this.showLevelUpNotification();
         this.podDistance = 0;
         this.survivalTime = 0;
@@ -2345,6 +2418,8 @@ private animate(): void {
 
         const scaleFactor = obstacle.mesh.scale.x;
         if (this.pod.position.distanceTo(obstacle.mesh.position) < 6 * scaleFactor) {
+           
+            if (!this.isHyperBoostActive) { 
             this.explosionSound.play();
             const directionAway = obstacle.mesh.position.clone().sub(this.pod.position).normalize();
             obstacle.body.velocity.set(directionAway.x * 50, directionAway.y * 50, directionAway.z * 50);
@@ -2356,6 +2431,11 @@ private animate(): void {
             lifeDelta -= 1;
             this.podSpeed *= 0.8;
             this.triggerHitParticles();
+        } else {
+            // During Hyper Boost, just push asteroid away
+            const directionAway = obstacle.mesh.position.clone().sub(this.pod.position).normalize();
+            obstacle.body.velocity.set(directionAway.x * 100, directionAway.y * 100, directionAway.z * 100);
+        }
         }
     }
 
@@ -2582,7 +2662,10 @@ private animate(): void {
         if (distanceToPod < 12) {
             this.stopEnemySound(enemy.body);
             lifeDelta -= 1;
-            this.triggerHitParticles();
+            if (!this.isHyperBoostActive) {
+                lifeDelta -= 1;
+                this.triggerHitParticles();
+            }
             this.removeEnemy(enemy, i);
         } else if (trackDistanceFromPod < -100) {
             this.stopEnemySound(enemy.body);
@@ -2802,12 +2885,14 @@ private animate(): void {
         }
 
         if (bullet.mesh.position.distanceTo(this.pod.position) < 5 && firingEnemy) {
-            let hits = (this.enemyHits.get(firingEnemy) || 0) + 1;
-            this.enemyHits.set(firingEnemy, hits);
-            if (hits >= this.shotsToLoseLife) {
-                lifeDelta -= 1;
-                this.triggerHitParticles();
-                this.enemyHits.set(firingEnemy, 0);
+            if (!this.isHyperBoostActive) {
+                    let hits = (this.enemyHits.get(firingEnemy) || 0) + 1;
+                    this.enemyHits.set(firingEnemy, hits);
+                    if (hits >= this.shotsToLoseLife) {
+                        lifeDelta -= 1;
+                        this.triggerHitParticles();
+                        this.enemyHits.set(firingEnemy, 0);
+                    }
             }
             this.scene.remove(bullet.mesh);
             this.world.removeBody(bullet.body);
@@ -2981,6 +3066,14 @@ private animate(): void {
         scoreValue.textContent = `${Math.floor(this.score)}`;
         enemiesKilledValue.textContent = `${this.enemiesKilled}`;
         fastShotValue.textContent = `${this.fastShotRounds}`;
+
+        // Add Hyper Boost counter
+        const hyperBoostValue = this.hyperBoostCounter.querySelector(".value") as HTMLElement;
+        if (hyperBoostValue) {
+            hyperBoostValue.textContent = `${this.hyperBoosts}`;
+        } else {
+            console.error("Hyper Boost value element not found in hyperBoostCounter");
+        }
     
         if (this.trackPath) {
             const progress = (this.podDistance / this.trackPath.getLength()) * 100;
