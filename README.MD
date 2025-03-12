@@ -20,6 +20,18 @@ Create a hello world threejs app with a plane using typescript, webpack. Create 
 
 Below is an example of what the setup script might look like. For best results, ask Grok directly for detailed instructions tailored to your operating system and requirements.
 
+### Running the Game
+
+Once you've set up the project, you can run it using:
+
+```bash
+# Start the development server
+npm run dev
+
+# Build the project for production
+npm run build
+```
+
 ```bash
 #!/bin/bash
 # setup.sh
@@ -240,6 +252,30 @@ Feel free to fork, clone, copy, and do whatever you want with this project. It's
 If you find this helpful, feel free to buy me a coffee: https://buymeacoffee.com/daniel_farinax
 
 Also make sure to follow me on Twitter: https://twitter.com/daniel_farinax
+
+## Game Mechanics
+
+The core of this project is the `PodRacingGame` class, which implements a 3D space shooter with the following key mechanics:
+
+1. **Space Racing**: Players navigate a procedurally generated track through space using the WASD keys, with a camera that follows the player's spaceship.
+
+2. **Combat System**: Players can shoot at asteroids and enemy ships using the spacebar, earning points for each destroyed object.
+
+3. **Level Progression**: The game features multiple levels with increasing difficulty, with each level requiring the player to complete a full track.
+
+4. **Power-ups**: Players can collect power-ups including "Fast Shot" (increased fire rate) and "Hyper Boost" (temporary speed increase with shield).
+
+5. **Physics**: The game uses Three.js for rendering and Cannon.js for physics simulations, creating realistic movement and collisions.
+
+6. **Enemy AI**: Enemy ships track and shoot at the player, with different enemy types including regular ships and faster "speedster" enemies.
+
+7. **Dynamic Audio**: The game features a dynamic audio system with engine sounds that change based on speed and player actions.
+
+8. **Visual Effects**: Explosions, particle effects, and shield visualizations enhance the gameplay experience.
+
+9. **HUD**: A heads-up display shows important game information including lives, score, speed, and level progress.
+
+The game implements a difficulty system with easy, normal, and hard modes, each affecting player lives, speed, and enemy behavior.
 
 ## Credits
 
