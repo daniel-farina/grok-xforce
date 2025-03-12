@@ -3,58 +3,283 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Three.js Game</title>
+    <title>Xforce Game developed with GrokAI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
     <style>
-        body, html {
-            margin: 0;
-            padding: 0;
-            overflow: hidden;
+        body, html { 
+            margin: 0; 
+            padding: 0; 
+            overflow: hidden; 
+            width: 100%; 
+            height: 100%; 
+            background: url('/assets/xforce_splash.png') no-repeat center center fixed; 
+            background-size: cover;
         }
-        canvas {
+
+        canvas { 
+            width: 100% !important; 
+            height: 100% !important; 
+            display: block; 
+            cursor: none; 
+        }
+
+        .bar::before { 
+            content: ''; 
+            position: absolute; 
+            width: var(--bar-width); 
+            height: 100%; 
+            background: inherit; 
+            transition: width 0.2s ease; 
+        }
+
+        .progress-bar::before { 
+            background: #00ff00; 
+            width: var(--bar-width); /* Already correct in your CSS */
+        }
+
+        #crosshair { 
+            position: fixed; 
+            top: 50%; 
+            left: 50%; 
+            transform: translate(-50%, -50%); 
+            width: 16px; 
+            height: 16px; 
+            border: 2px solid #ff5555; 
+            border-radius: 50%; 
+            pointer-events: none; 
+            z-index: 15; 
+            box-shadow: 0 0 5px #ff5555; 
+        }
+
+        #crosshair::before { 
+            content: ''; 
+            position: absolute; 
+            top: 50%; 
+            left: 50%; 
+            width: 10px; 
+            height: 2px; 
+            background: #ff5555; 
+            transform: translate(-50%, -50%); 
+        }
+
+        #crosshair::after { 
+            content: ''; 
+            position: absolute; 
+            top: 50%; 
+            left: 50%; 
+            width: 2px; 
+            height: 10px; 
+            background: #ff5555; 
+            transform: translate(-50%, -50%); 
+        }
+
+        #compassContainer {
+    position: fixed;
+    bottom: 4px;
+    left: 4px;
+}
+#compass {
+    width: 100px;
+    height: 100px;
+    text-align: center;
+}
+        .direction {
+            position: absolute;
+            font-size: 20px;
+            font-weight: bold;
+            color: #00ffff;
+            text-shadow: 0 0 5px #00ffff;
+        }
+
+        #compassN { top: 0; left: 50%; transform: translateX(-50%); }
+        #compassE { right: 0; top: 50%; transform: translateY(-50%); }
+        #compassS { bottom: 0; left: 50%; transform: translateX(-50%); }
+        #compassW { left: 0; top: 50%; transform: translateY(-50%); }
+
+        .bullet-indicators {
+            position: absolute;
+            top: 0;
+            left: 0;
             width: 100%;
             height: 100%;
-            cursor: none;
-        }
-        #ammoCounter {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            color: white;
-            font-family: Arial;
-            font-size: 20px;
-            text-shadow: 1px 1px 2px black;
-        }
-        #crosshair {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 20px;
-            height: 20px;
-            transform: translate(-50%, -50%);
-            color: white;
-            font-size: 20px;
-            text-align: center;
             pointer-events: none;
         }
-        #pauseMenu {
+
+        .bullet-indicator {
             position: absolute;
-            top: 50%;
+            width: 0;
+            height: 0;
+            border-left: 15px solid transparent;
+            border-right: 15px solid transparent;
+            border-bottom: 30px solid #ff0000;
+            opacity: 0.8;
+            transform-origin: center bottom;
+        }
+
+        #startPrompt {
+            position: fixed;
+            top: 20%;
             left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(0, 0, 0, 0.8);
-            color: white;
-            padding: 20px;
-            display: none;
-            text-align: center;
+            transform: translateX(-50%);
+            font-size: 24px;
+            color: #00ffff;
+            text-shadow: 0 0 10px #00ffff;
+            font-family: 'Orbitron', sans-serif;
+            z-index: 20;
+        }
+
+        #levelUpNotification {
+            opacity: 1;
         }
     </style>
-<script defer src="js/bundle.js"></script></head>
+<script defer src="js/bundle.js"></script><script defer src="js/bundle.js"></script></head>
 <body>
-    <div id="ammoCounter">Ammo: 30</div>
-    <div id="crosshair">+</div>
-    <div id="pauseMenu">
-        <h2>Paused</h2>
-        <button id="resumeButton">Resume</button>
+    <div id="startPrompt">Press Start to Begin</div>
+    <canvas id="renderCanvas"></canvas>
+    
+    <div id="hud" class="fixed top-0 left-0 w-full flex justify-between items-start p-4 font-orbitron text-cyan-400 pointer-events-none z-10">
+        <div class="flex flex-col gap-2">
+            <div id="fastShotCounter" class="hud-item bg-black/70 border border-cyan-400 rounded p-2 shadow-inner shadow-cyan-500/30 text-shadow-md">
+                <span class="label uppercase font-bold text-sm">Fast Shots</span>
+                <span class="value text-base ml-2">0</span>
+            </div>
+            <div id="speedDisplay" class="hud-item bg-black/70 border border-cyan-400 rounded p-2 shadow-inner shadow-cyan-500/30 text-shadow-md">
+                <span class="label uppercase font-bold text-sm">Speed</span>
+                <span class="value text-base ml-2">0</span>
+            </div>
+            <div id="hyperBoostCounter" class="hud-item bg-black/70 border border-cyan-400 rounded p-2 shadow-inner shadow-cyan-500/30 text-shadow-md">
+                <span class="label uppercase font-bold text-sm">Hyper Boost</span>
+                <span class="value text-base ml-2">3</span>
+                <div class="text-xs mt-1 text-cyan-200">Press X to activate</div>
+            </div>
+        </div>
+        <div id="bulletIndicators" class="bullet-indicators"></div>
+        <div id="compassContainer" class="fixed bottom-4 left-4 flex flex-col items-center">
+            <div id="compass" class="compass mt-2">
+                <span id="compassN" class="direction">N</span>
+                <span id="compassE" class="direction">E</span>
+                <span id="compassS" class="direction">S</span>
+                <span id="compassW" class="direction">W</span>
+            </div>
+        </div>
+        <div class="flex gap-4">
+            <div id="healthCounter" class="hud-item bg-black/70 border border-cyan-400 rounded p-2 shadow-inner shadow-cyan-500/30 text-shadow-md">
+                <span class="label uppercase font-bold text-sm">Shields</span>
+                <span class="value text-base ml-2"></span>
+                <div class="bar w-16 h-1.5 bg-gray-800 border border-cyan-400 relative overflow-hidden" style="--bar-width: 100%; background: #00ff00;"></div>
+            </div>
+            <div id="scoreCounter" class="hud-item bg-black/70 border border-cyan-400 rounded p-2 shadow-inner shadow-cyan-500/30 text-shadow-md">
+                <span class="label uppercase font-bold text-sm">Score</span>
+                <span class="value text-base ml-2">0</span>
+            </div>
+            <div id="enemiesKilledCounter" class="hud-item bg-black/70 border border-cyan-400 rounded p-2 shadow-inner shadow-cyan-500/30 text-shadow-md">
+                <span class="label uppercase font-bold text-sm">Targets</span>
+                <span class="value text-base ml-2">0</span>
+            </div>
+        </div>
+        <div class="hud-item progress bg-black/70 border border-cyan-400 rounded p-2 shadow-inner shadow-cyan-500/30 text-shadow-md">
+            <span class="label uppercase font-bold text-sm">Level</span>
+            <span id="levelValue" class="value text-base ml-2">1</span>
+            <div id="progressBar">
+                <div class="progress-bar w-24 h-2 bg-gray-800 border border-cyan-400 relative overflow-hidden" style="--bar-width: 0%;"></div>
+                <span class="value text-base mt-1">0%</span>
+            </div>
+        </div>
     </div>
+    <div id="countdown" class="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-center font-orbitron text-cyan-400 drop-shadow-[0_0_15px_#00ffff] z-10">
+        <div id="countdownMain" class="text-5xl font-bold"></div>
+        <div id="countdownSub" class="text-lg mt-2 hidden"></div>
+    </div>
+    <div id="pauseMenu" class="hidden fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-black/20 border-2 border-cyan-400 rounded-lg p-8 text-cyan-400 text-center shadow-[0_0_15px_rgba(0,255,255,0.5)] z-20 font-orbitron w-96">
+        <h2 class="text-3xl font-bold mb-4">Paused</h2>
+        <button id="resumeButton" class="mt-2 px-8 py-3 bg-cyan-400 text-[#0a0f1f] rounded hover:bg-cyan-500 shadow-[0_0_5px_#00ffff] text-lg">Resume</button>
+    </div>
+    <div id="gameOverMenu" class="hidden fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-[#0a0f1f]/90 border-2 border-cyan-400 rounded-lg p-5 text-cyan-400 text-center shadow-[0_0_15px_rgba(0,255,255,0.5)] z-20 font-orbitron">
+        <h2 class="text-2xl font-bold">Game Over!</h2>
+        <p class="my-2">Press 'R' or click below to restart.</p>
+        <button id="restartButton" class="mt-2 px-6 py-2 bg-cyan-400 text-[#0a0f1f] rounded hover:bg-cyan-500 shadow-[0_0_5px_#00ffff]">Restart Game</button>
+    </div>
+    <div id="crosshair"></div>
+    <button id="startButton" class="hidden fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 px-8 py-4 text-xl bg-cyan-400 text-[#0a0f1f] rounded hover:bg-cyan-500 shadow-[0_0_10px_#00ffff] z-20 font-orbitron">Start Game</button>
+    <div id="difficultyMenu" class="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-[#0a0f1f]/90 border-2 border-cyan-400 rounded-lg p-5 text-cyan-400 text-center shadow-[0_0_15px_rgba(0,255,255,0.5)] z-20 font-orbitron">
+        <h2 class="text-xl font-bold">Select Difficulty</h2>
+        <button id="easyButton" class="m-2 px-4 py-2 bg-cyan-400 text-[#0a0f1f] rounded hover:bg-cyan-500 shadow-[0_0_5px_#00ffff]">Easy</button>
+        <button id="normalButton" class="m-2 px-4 py-2 bg-cyan-400 text-[#0a0f1f] rounded hover:bg-cyan-500 shadow-[0_0_5px_#00ffff]">Normal</button>
+        <button id="hardButton" class="m-2 px-4 py-2 bg-cyan-400 text-[#0a0f1f] rounded hover:bg-cyan-500 shadow-[0_0_5px_#00ffff]">Hard</button>
+    </div>
+    <div id="controls" class="fixed bottom-2 left-1/2 transform -translate-x-1/2 bg-[#0a0f1f]/70 border border-cyan-400 rounded p-2 text-cyan-400 font-orbitron text-sm z-10 shadow-[0_0_5px_#00ffff]">
+        <div class="tabs flex gap-2 mb-2">
+            <div id="podTab" class="tab px-2 py-1 bg-cyan-400/20 cursor-pointer rounded active:bg-cyan-400 active:text-[#0a0f1f]">Spaceship Settings</div>
+            <div id="enemyTab" class="tab px-2 py-1 bg-cyan-400/20 cursor-pointer rounded">Enemy Settings</div>
+            <div id="speedsterTab" class="tab px-2 py-1 bg-cyan-400/20 cursor-pointer rounded">Speedster Settings</div> <!-- New tab -->
+            <div id="engineTab" class="tab px-2 py-1 bg-cyan-400/20 cursor-pointer rounded">Engine Sound</div>
+        </div>
+        <div id="speedsterControls" class="tab-content hidden flex-wrap gap-2"> <!-- New controls -->
+            <label class="flex items-center gap-1">Spawn Distance: <input type="range" id="speedsterSpawnDistance" min="500" max="5000" value="1170" step="100" class="w-24 accent-cyan-400"><span id="speedsterSpawnDistanceValue" class="w-12 text-right">1170</span></label>
+            <label class="flex items-center gap-1">Lateral Offset: <input type="range" id="speedsterLateralOffset" min="50" max="1000" value="200" step="50" class="w-24 accent-cyan-400"><span id="speedsterLateralOffsetValue" class="w-12 text-right">200</span></label>
+            <label class="flex items-center gap-1">Base Speed: <input type="range" id="speedsterBaseSpeed" min="10" max="100" value="25" step="5" class="w-24 accent-cyan-400"><span id="speedsterBaseSpeedValue" class="w-12 text-right">25</span></label>
+        </div>
+        <div id="podControls" class="tab-content flex flex-wrap gap-2">
+            <label class="flex items-center gap-1">Scale: <input type="range" id="spaceshipScale" min="0.1" max="5" value="3.4" step="0.1" class="w-24 accent-cyan-400"><span id="spaceshipScaleValue" class="w-12 text-right">3.4</span></label>
+            <label class="flex items-center gap-1">Ship Pos X: <input type="range" id="spaceshipPosX" min="-50" max="50" value="14" step="1" class="w-24 accent-cyan-400"><span id="spaceshipPosXValue" class="w-12 text-right">14</span></label>
+            <label class="flex items-center gap-1">Ship Pos Y: <input type="range" id="spaceshipPosY" min="-50" max="50" value="-3" step="1" class="w-24 accent-cyan-400"><span id="spaceshipPosYValue" class="w-12 text-right">-3</span></label>
+            <label class="flex items-center gap-1">Ship Pos Z: <input type="range" id="spaceshipPosZ" min="-50" max="50" value="15" step="1" class="w-24 accent-cyan-400"><span id="spaceshipPosZValue" class="w-12 text-right">15</span></label>
+            <label class="flex items-center gap-1">Ship Rot X: <input type="range" id="spaceshipRotX" min="-180" max="180" value="0" step="10" class="w-24 accent-cyan-400"><span id="spaceshipRotXValue" class="w-12 text-right">0</span></label>
+            <label class="flex items-center gap-1">Ship Rot Y: <input type="range" id="spaceshipRotY" min="-180" max="180" value="0" step="10" class="w-24 accent-cyan-400"><span id="spaceshipRotYValue" class="w-12 text-right">0</span></label>
+            <label class="flex items-center gap-1">Ship Rot Z: <input type="range" id="spaceshipRotZ" min="-180" max="180" value="0" step="10" class="w-24 accent-cyan-400"><span id="spaceshipRotZValue" class="w-12 text-right">0</span></label>
+            <label class="flex items-center gap-1">Ship Axis X: <input type="range" id="spaceshipAxisX" min="-1" max="1" value="0" step="0.1" class="w-24 accent-cyan-400"><span id="spaceshipAxisXValue" class="w-12 text-right">0.0</span></label>
+            <label class="flex items-center gap-1">Ship Axis Y: <input type="range" id="spaceshipAxisY" min="-1" max="1" value="0" step="0.1" class="w-24 accent-cyan-400"><span id="spaceshipAxisYValue" class="w-12 text-right">0.0</span></label>
+            <label class="flex items-center gap-1">Ship Axis Z: <input type="range" id="spaceshipAxisZ" min="-1" max="1" value="-1" step="0.1" class="w-24 accent-cyan-400"><span id="spaceshipAxisZValue" class="w-12 text-right">-1.0</span></label>
+        </div>
+        <div id="enemyControls" class="tab-content hidden flex-wrap gap-2">
+            <label class="flex items-center gap-1">Spawn Distance: <input type="range" id="spawnDistance" min="500" max="5000" value="1170" step="100" class="w-24 accent-cyan-400"><span id="spawnDistanceValue" class="w-12 text-right">1170</span></label>
+            <label class="flex items-center gap-1">Lateral Offset: <input type="range" id="lateralOffset" min="50" max="1000" value="200" step="50" class="w-24 accent-cyan-400"><span id="lateralOffsetValue" class="w-12 text-right">200</span></label>
+            <label class="flex items-center gap-1">Base Speed: <input type="range" id="baseSpeed" min="10" max="100" value="25" step="5" class="w-24 accent-cyan-400"><span id="baseSpeedValue" class="w-12 text-right">25</span></label>
+            <label class="flex items-center gap-1">Fire Rate (ms): <input type="range" id="fireRate" min="500" max="2000" value="1000" step="100" class="w-24 accent-cyan-400"><span id="fireRateValue" class="w-12 text-right">1000</span></label>
+            <label class="flex items-center gap-1">Bullet Speed: <input type="range" id="bulletSpeed" min="100" max="1000" value="500" step="50" class="w-24 accent-cyan-400"><span id="bulletSpeedValue" class="w-12 text-right">500</span></label>
+        </div>
+        <div id="engineControls" class="tab-content hidden flex-wrap gap-2">
+            <label class="flex items-center gap-1">Volume: <input type="range" id="engineVolume" min="0" max="0.5" value="0.01" step="0.01" class="w-24 accent-cyan-400"><span id="engineVolumeValue" class="w-12 text-right">0.01</span></label>
+            <label class="flex items-center gap-1">Base Freq: <input type="range" id="engineFrequency" min="20" max="1000" value="100" step="10" class="w-24 accent-cyan-400"><span id="engineFrequencyValue" class="w-12 text-right">100</span></label>
+            <label class="flex items-center gap-1">Detune: <input type="range" id="engineDetune" min="-1200" max="1200" value="0" step="100" class="w-24 accent-cyan-400"><span id="engineDetuneValue" class="w-12 text-right">0</span></label>
+            <label class="flex items-center gap-1">Yaw Mod: <input type="range" id="engineYawMod" min="0" max="200" value="50" step="10" class="w-24 accent-cyan-400"><span id="engineYawModValue" class="w-12 text-right">50</span></label>
+            <label class="flex items-center gap-1">Filter Freq: <input type="range" id="engineFilterFreq" min="100" max="5000" value="2000" step="100" class="w-24 accent-cyan-400"><span id="engineFilterFreqValue" class="w-12 text-right">2000</span></label>
+            <label class="flex items-center gap-1">Type: <select id="engineType" class="w-24 bg-cyan-400/20 text-cyan-400 border border-cyan-400 rounded p-1">
+                <option value="sawtooth" selected>Sawtooth</option>
+                <option value="sine">Sine</option>
+                <option value="square">Square</option>
+                <option value="triangle">Triangle</option>
+            </select></label>
+        </div>
+    </div>
+    <video id="nebulaVideo" hidden loop muted playsinline>
+        <source src="/assets/nebula.mp4" type="video/mp4">
+    </video>
+    <video id="marsVideo" hidden loop muted playsinline>
+        <source src="/assets/planetx.mp4" type="video/mp4">
+    </video>
+    <video id="enemyVideo" hidden loop muted playsinline>
+        <source src="/assets/enemy.mp4" type="video/mp4">
+    </video>
+    <video id="purplePlanetVideo" hidden loop muted playsinline>
+        <source src="/assets/lava2.mp4" type="video/mp4">
+    </video>
+
+    <div class="fixed bottom-4 right-4 flex gap-2 z-20">
+        <a href="https://x.com/Daniel_Farinax" target="_blank" id="twitterLink" class="bg-[#0a0f1f]/70 border border-cyan-400 rounded-full p-2 text-cyan-400 font-orbitron text-sm hover:bg-cyan-400 hover:text-[#0a0f1f] transition-colors shadow-[0_0_5px_#00ffff]">
+            <svg class="w-6 h-6 inline-block mr-1" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+            </svg>
+            Follow @Daniel_Farinax
+        </a>
+        <a href="https://www.buymeacoffee.com/yourusername" target="_blank" id="coffeeLink" class="bg-[#0a0f1f]/70 border border-cyan-400 rounded-full p-2 text-cyan-400 font-orbitron text-sm hover:bg-cyan-400 hover:text-[#0a0f1f] transition-colors shadow-[0_0_5px_#00ffff]">
+            <svg class="w-6 h-6 inline-block mr-1" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15.93V15h2v2.93c-1.65-.17-2.97-1.49-3.14-3.14H8v-2h1.86c.17-1.65 1.49-2.97 3.14-3.14V7h-2v2.93c-1.65-.17-2.97-1.49-3.14-3.14H6v-2h1.86C8.03 3.14 9.35 1.82 11 1.65V4h2V1.65c1.65.17 2.97 1.49 3.14 3.14H18v2h-1.86c-.17 1.65-1.49 2.97-3.14 3.14V11h2v-2.93c1.65.17 2.97 1.49 3.14 3.14H20v2h-1.86c-.17 1.65-1.49 2.97-3.14 3.14V15h-2v2.93c-1.65-.17-2.97-1.49-3.14-3.14H10v2h1z"/>
+            </svg>
+            Buy me a coffee
+        </a>
+    </div>
+    <script type="module" src="/dist/app.js"></script>
 </body>
 </html>

@@ -1,5 +1,6 @@
 const path = require("path");
 const HtmlWebpackPlugin = require("html-webpack-plugin");
+const CopyWebpackPlugin = require("copy-webpack-plugin");
 
 module.exports = {
     entry: path.resolve(__dirname, "src/app.ts"),
@@ -32,7 +33,20 @@ module.exports = {
     plugins: [
         new HtmlWebpackPlugin({
             template: path.resolve(__dirname, "public/index.html"),
-            inject: true, // Ensure script is injected
+            inject: true,
+        }),
+        new CopyWebpackPlugin({
+            patterns: [
+                {
+                    from: path.resolve(__dirname, "public"), // Copy public assets
+                    to: path.resolve(__dirname, "dist"),
+                    globOptions: { ignore: ["**/index.html"] }, // Avoid duplicate HTML file
+                },
+                {
+                    from: path.resolve(__dirname, "dist"), // Copy built files from dist
+                    to: "/Users/web/ai/board/threejs-game-racing/xforce/public",
+                }
+            ],
         }),
     ],
     mode: "development",
