@@ -10,27 +10,36 @@ This project is a recreation of the game [xforce.live](https://xforce.live) whic
 
 The commit history is messy and was only used as checkpoints when working on the project locally for git diff purposes.
 
-The project was created using a basic starter prompt to create a project using TypeScript as follows:
-
-```
-Create a hello world threejs app with a plane using typescript, webpack. Create a bash script called setup.sh to get everything setup. The project should contain a simple src/app.ts file for all game logic and a public/index.html for the html part. We should be able to run in dev mode and also compile it.
-```
-
-## Getting Started
-
-Below is an example of what the setup script might look like. For best results, ask Grok directly for detailed instructions tailored to your operating system and requirements.
-
 ### Running the Game
 
 Once you've set up the project, you can run it using:
 
 ```bash
+# Clone this repo to your computer
+git clone git@github.com:daniel-farina/grok-xforce.git
+
+# Install dependencies
+npm install
+
 # Start the development server
 npm run dev
 
 # Build the project for production
 npm run build
 ```
+
+# Starter prompt
+The project was created using a basic starter prompt to create a project using TypeScript as follows:
+
+```
+Create a hello world threejs app with a plane using typescript, webpack. Create a bash script called setup.sh to get everything setup. The project should contain a simple src/app.ts file for all game logic and a public/index.html for the html part. We should be able to run in dev mode and also compile it.
+```
+
+
+## Output
+
+Below is an example of what the setup script might look like. For best results, ask Grok directly for detailed instructions tailored to your operating system and requirements.
+
 
 ```bash
 #!/bin/bash
